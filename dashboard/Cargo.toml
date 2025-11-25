@@ -1,0 +1,14 @@
+[package]
+name = "dashboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.7.5"
+tokio = { version = "1.37.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tower-http = { version = "0.5.2", features = ["fs", "trace", "cors"] }
+dirs = "5.0.1"
+chrono = { version = "0.4", features = ["serde"] }
+scrapers = { path = "../scrapers" } # Reuse types

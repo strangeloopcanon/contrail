@@ -1,0 +1,33 @@
+# Build artifacts
+/target
+**/target/
+
+# Coverage and profiling
+coverage/
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.lcov
+
+# Editor and OS noise
+.DS_Store
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Rust formatter backups
+**/*.rs.bk

@@ -1,0 +1,11 @@
+[package]
+name = "exporter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0.1"
+serde_json = "1.0"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

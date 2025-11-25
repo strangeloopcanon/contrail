@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.contrail.daemon</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/rohit/Documents/Workspace/Coding/contrail/target/release/core_daemon</string>
+    </array>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <false/>
+    
+    <key>StandardOutPath</key>
+    <string>/Users/rohit/.contrail/daemon.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/rohit/.contrail/daemon_error.log</string>
+    
+    <key>WorkingDirectory</key>
+    <string>/Users/rohit/Documents/Workspace/Coding/contrail</string>
+</dict>
+</plist>

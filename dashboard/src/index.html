@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contrail Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #38bdf8;
+            --border: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .status {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .status.live {
+            color: #4ade80;
+        }
+
+        select {
+            background-color: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 0.9rem;
+        }
+
+        .session-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .session-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            transition: border-color 0.2s;
+        }
+
+        .session-card:hover {
+            border-color: var(--accent);
+        }
+
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .session-title {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .tool-badge {
+            background-color: #334155;
+            color: #e2e8f0;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            font-weight: bold;
+            display: inline-block;
+        }
+
+        .tool-badge.cursor {
+            background-color: #3b82f6;
+        }
+
+        .tool-badge.codex-cli {
+            background-color: #10b981;
+        }
+
+        .tool-badge.claude-code {
+            background-color: #f59e0b;
+            color: #fff;
+        }
+
+        .tool-badge.antigravity {
+            background-color: #8b5cf6;
+        }
+
+        .session-info {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .interaction {
+            margin-bottom: 12px;
+            padding: 12px;
+            border-left: 3px solid #334155;
+            background-color: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+        }
+
+        .interaction.user {
+            border-left-color: #3b82f6;
+        }
+
+        .interaction.assistant {
+            border-left-color: #10b981;
+        }
+
+        .interaction-role {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .interaction-content {
+            font-family: "Menlo", "Monaco", "Courier New", monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            color: #e2e8f0;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .metadata {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .meta-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .alert {
+            color: #f87171;
+            font-weight: bold;
+        }
+
+        .effect {
+            color: #4ade80;
+        }
+
+        .clipboard {
+            color: #fbbf24;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>✈️ Contrail Flight Recorder</h1>
+            <div class="controls">
+                <select id="toolFilter">
+                    <option value="all">All Tools</option>
+                    <option value="codex-cli">Codex</option>
+                    <option value="cursor">Cursor</option>
+                    <option value="antigravity">Antigravity</option>
+                    <option value="claude-code">Claude</option>
+                </select>
+                <div class="status live">● Live</div>
+            </div>
+        </header>
+
+        <div id="session-list" class="session-list">
+            <div style="text-align: center; color: var(--text-secondary);">Loading sessions...</div>
+        </div>
+    </div>
+
+    <script>
+        let currentFilter = 'all';
+
+        document.getElementById('toolFilter').addEventListener('change', (e) => {
+            currentFilter = e.target.value;
+            fetchLogs();
+        });
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const logs = await response.json();
+                renderSessions(logs);
+            } catch (e) {
+                console.error("Failed to fetch logs", e);
+            }
+        }
+
+        function renderSessions(logs) {
+            // Filter logs by tool
+            let filtered = logs;
+            if (currentFilter !== 'all') {
+                filtered = logs.filter(log => log.source_tool === currentFilter);
+            }
+
+            // Group by session_id
+            const sessions = {};
+            filtered.forEach(log => {
+                const sessionId = log.session_id || 'unknown';
+                if (!sessions[sessionId]) {
+                    sessions[sessionId] = {
+                        id: sessionId,
+                        tool: log.source_tool,
+                        project: log.project_context,
+                        interactions: [],
+                        metadata: log.metadata || {}
+                    };
+                }
+                sessions[sessionId].interactions.push({
+                    role: log.interaction?.role || 'unknown',
+                    content: log.interaction?.content || '',
+                    timestamp: log.timestamp,
+                    metadata: log.metadata || {}
+                });
+            });
+
+            // Sort sessions by latest interaction
+            const sessionList = Object.values(sessions).sort((a, b) => {
+                const aLatest = Math.max(...a.interactions.map(i => new Date(i.timestamp)));
+                const bLatest = Math.max(...b.interactions.map(i => new Date(i.timestamp)));
+                return bLatest - aLatest;
+            });
+
+            const container = document.getElementById('session-list');
+            container.innerHTML = '';
+
+            if (sessionList.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">No sessions found.</div>';
+                return;
+            }
+
+            sessionList.forEach(session => {
+                const card = document.createElement('div');
+                card.className = 'session-card';
+
+                // Session metadata
+                const firstInteraction = session.interactions[0];
+                const lastInteraction = session.interactions[session.interactions.length - 1];
+                const sessionStart = new Date(firstInteraction.timestamp).toLocaleString();
+                const sessionEnd = new Date(lastInteraction.timestamp).toLocaleString();
+                const cwd = firstInteraction.metadata.cwd || session.metadata.cwd || session.project;
+                const project = session.project || cwd || 'Unknown';
+
+                // Aggregate metadata
+                let hasInterruption = session.interactions.some(i => i.metadata.interrupted);
+                let hasCopied = session.interactions.some(i => i.metadata.copied_to_clipboard);
+                let fileEffects = session.interactions.flatMap(i => i.metadata.file_effects || []);
+                let gitBranch = firstInteraction.metadata.git_branch || '';
+                let model = firstInteraction.metadata.model || session.metadata.model || '';
+
+                let metaHtml = '';
+                if (hasInterruption) metaHtml += `<span class="meta-item alert">⚠️ Interrupted</span>`;
+                if (hasCopied) metaHtml += `<span class="meta-item clipboard">📋 Copied to Clipboard</span>`;
+                if (fileEffects.length > 0) metaHtml += `<span class="meta-item effect">📝 ${fileEffects.length} File Changes</span>`;
+                if (gitBranch) metaHtml += `<span class="meta-item">🌿 ${gitBranch}</span>`;
+                if (cwd) metaHtml += `<span class="meta-item">📂 ${cwd}</span>`;
+                if (model) metaHtml += `<span class="meta-item">🤖 ${model}</span>`;
+
+                // Render interactions
+                let interactionsHtml = '';
+                session.interactions.forEach(interaction => {
+                    const role = interaction.role;
+                    const content = escapeHtml(interaction.content);
+                    const timestamp = new Date(interaction.timestamp).toLocaleTimeString();
+
+                    interactionsHtml += `
+                        <div class="interaction ${role}">
+                            <div class="interaction-role">${role} - ${timestamp}</div>
+                            <div class="interaction-content">${content}</div>
+                        </div>
+                    `;
+                });
+
+                card.innerHTML = `
+                    <div class="session-header">
+                            <div class="session-title">
+                                <span class="tool-badge ${session.tool}">${session.tool}</span>
+                                <span class="session-info">📂 ${project}</span>
+                                <span class="session-info">${session.interactions.length} interactions • ${sessionStart}</span>
+                            </div>
+                        </div>
+                    ${interactionsHtml}
+                    ${metaHtml ? `<div class="metadata">${metaHtml}</div>` : ''}
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Poll every 2 seconds
+        fetchLogs();
+        setInterval(fetchLogs, 2000);
+    </script>
+</body>
+
+</html>
