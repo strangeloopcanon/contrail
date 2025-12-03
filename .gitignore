@@ -29,5 +29,8 @@ coverage/
 !.env.example
 !.env.sample
 
+# Local Contrail data (keeps personal logs/memories out of commits)
+.contrail/
+/.beads
 # Rust formatter backups
 **/*.rs.bk

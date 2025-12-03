@@ -82,6 +82,13 @@ cargo run -p dashboard
 
 To restart later, just run steps 2–4 as needed (skip rebuild unless deps change).
 
+### Quickstart (capture → view → analyze)
+
+1. **Live capture:** `cargo run -p core_daemon` (writes to `~/.contrail/logs/master_log.jsonl`).  
+2. **View dashboard:** `cargo run -p dashboard` then open `http://127.0.0.1:3000`.  
+3. **Analyze (read-only):** `cargo run -p analysis` (optional GPT features need `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`).  
+4. **Historical backfill (optional, one-time):** `cargo run -p importer` to pull past Codex/Claude history into the master log.
+
 ### Export a curated dataset (seed for fine-tuning)
 
 After you’ve collected logs, produce a trimmed JSONL for training:
@@ -117,6 +124,29 @@ Use the exported file as your starting point for fine-tuning or further filterin
   }
 }
 ```
+
+### Analysis service (memories/probing)
+
+An optional analysis surface lives in the `analysis` crate. It reads the existing `~/.contrail/logs/master_log.jsonl` (read-only), scores sessions/turns for salience, and exposes a small API for building “memories” and probe prompts (no embeddings).
+
+Run it locally:
+```bash
+cargo run -p analysis
+# env overrides: CONTRAIL_LOG_PATH=... ANALYSIS_BIND=127.0.0.1:3210
+```
+
+Endpoints:
+- `/api/sessions?day=YYYY-MM-DD` — session summaries with salience scores.
+- `/api/salient?limit=5&day=YYYY-MM-DD` — top sessions with salient turns.
+- `/api/probe?q=question&limit=12&day=YYYY-MM-DD` — lexical probe over turns; returns matching snippets plus a suggested LLM prompt for GPT-5.1 Responses API.
+- `/api/memories` — GET to list stored memory records; POST `{ "q": "...", "limit": N, "llm_response": {...} }` to persist a probe + (optional) LLM output.
+- `/api/memories/autoprobe` — POST `{ "q": "...", "limit": N, "model": "gpt-5.1", "temperature": 0 }`; requires `OPENAI_API_KEY`, calls GPT with the suggested prompt, and stores the response.
+- `/api/memories/autoprobe/defaults` — POST to run a default (or custom) set of probes in one shot and store GPT-backed memories. Body: `{ "queries": ["error","interrupted",...], "limit": N, "model": "gpt-5.1", "temperature": 0 }`. If `queries` is omitted, uses the built-in defaults (errors, interruptions, patch failures, rate limits, tool-call failures). This is opt-in; trigger it when you want a turnkey daily/adhoc sweep.
+
+### End-to-end flow (arms-length analytics)
+- **Capture live:** `cargo run -p core_daemon` to tail active sessions (writes `~/.contrail/logs/master_log.jsonl`), optionally view with `cargo run -p dashboard` at `http://127.0.0.1:3000`.
+- **Capture historical (one-time/backfill):** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
+- **Analyze on demand:** `cargo run -p analysis` (read-only) to list sessions, fetch salient turns, run probes, and create GPT-backed memories via `/api/memories/autoprobe` (requires `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`). Analytics output is stored separately at `~/.contrail/analysis/memories.jsonl`; the master log remains unchanged. Use `/api/memories/autoprobe/defaults` for a one-click sweep of common pain points.
 
 ## 🔧 Supported Tools Configuration
 
