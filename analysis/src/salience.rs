@@ -15,7 +15,10 @@ pub fn score_turn(content: &str, role: &str, metadata: &serde_json::Value) -> (f
         score += 0.4;
         cues.push("question".to_string());
     }
-    if contains_any(&lower, &["error", "fail", "panic", "exception", "stack trace"]) {
+    if contains_any(
+        &lower,
+        &["error", "fail", "panic", "exception", "stack trace"],
+    ) {
         score += 0.3;
         cues.push("error".to_string());
     }
@@ -29,7 +32,11 @@ pub fn score_turn(content: &str, role: &str, metadata: &serde_json::Value) -> (f
     }
 
     if let Some(obj) = metadata.as_object() {
-        if obj.get("interrupted").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if obj
+            .get("interrupted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             score += 0.5;
             cues.push("interrupted".to_string());
         }

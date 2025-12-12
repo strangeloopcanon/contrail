@@ -1,4 +1,6 @@
+use crate::parse::parse_timestamp_value;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::hash_map::DefaultHasher;
@@ -14,6 +16,17 @@ pub struct CursorMessage {
     pub role: String,
     pub content: String,
     pub metadata: Map<String, Value>,
+}
+
+pub fn timestamp_from_metadata(meta: &Map<String, Value>) -> Option<DateTime<Utc>> {
+    for key in ["timestamp", "createdAt", "updatedAt"] {
+        if let Some(v) = meta.get(key) {
+            if let Some(ts) = parse_timestamp_value(v) {
+                return Some(ts);
+            }
+        }
+    }
+    None
 }
 
 pub fn read_cursor_messages(db_path: &Path) -> Result<Vec<CursorMessage>> {
@@ -291,13 +304,10 @@ fn trim_metadata_str(s: &str) -> String {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::path::PathBuf;
 
     #[test]
     fn parses_messages_from_state_db() -> Result<()> {
-        let path = PathBuf::from(
-            std::env::temp_dir().join(format!("cursor_state_test_{}.db", Uuid::new_v4())),
-        );
+        let path = std::env::temp_dir().join(format!("cursor_state_test_{}.db", Uuid::new_v4()));
         let conn = Connection::open(&path)?;
         conn.execute(
             "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)",

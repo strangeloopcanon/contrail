@@ -1,6 +1,10 @@
+pub mod claude;
+pub mod codex;
+pub mod config;
 pub mod cursor;
 pub mod harvester;
 pub mod log_writer;
 pub mod notifier;
+pub mod parse;
 pub mod sentry;
 pub mod types;

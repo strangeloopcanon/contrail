@@ -1,24 +1,24 @@
 mod ingest;
-mod models;
-mod memory;
 mod llm;
+mod memory;
+mod models;
 mod salience;
 mod search;
 
 use crate::models::ScoredTurn;
 
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use chrono::NaiveDate;
+use memory::{MemoryRecord, append_memory, read_memories};
 use models::{
     Dataset, ProbeResponse, SalientResponse, SalientSession, SessionsResponse, TurnSummary,
 };
-use memory::{append_memory, read_memories, MemoryRecord};
 use serde::Deserialize;
 use std::env;
 use std::path::PathBuf;
@@ -142,11 +142,7 @@ async fn get_sessions(
 ) -> ApiResult<Json<SessionsResponse>> {
     let day = parse_day(&query.day)?;
     let dataset = ensure_dataset(&state, day, query.refresh.unwrap_or(false)).await?;
-    let mut sessions: Vec<_> = dataset
-        .sessions
-        .iter()
-        .map(|s| s.summary.clone())
-        .collect();
+    let mut sessions: Vec<_> = dataset.sessions.iter().map(|s| s.summary.clone()).collect();
     sessions.sort_by(|a, b| b.score.total_cmp(&a.score));
     Ok(Json(SessionsResponse {
         sessions,
@@ -322,8 +318,8 @@ async fn ensure_dataset(
     };
 
     if needs_reload {
-        let reloaded =
-            ingest::load_dataset(&state.log_path, day).map_err(|e| ApiError(e.context("reload")))?;
+        let reloaded = ingest::load_dataset(&state.log_path, day)
+            .map_err(|e| ApiError(e.context("reload")))?;
         let mut guard = state.data.write().await;
         *guard = reloaded.clone();
         return Ok(reloaded);

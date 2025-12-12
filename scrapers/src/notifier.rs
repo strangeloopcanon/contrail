@@ -15,3 +15,9 @@ impl Notifier {
             .show();
     }
 }
+
+impl Default for Notifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
