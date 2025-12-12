@@ -1375,6 +1375,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]

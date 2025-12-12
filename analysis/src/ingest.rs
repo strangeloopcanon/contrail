@@ -1,6 +1,4 @@
-use crate::models::{
-    Dataset, ScoredTurn, SessionBundle, SessionSummary, TurnSummary,
-};
+use crate::models::{Dataset, ScoredTurn, SessionBundle, SessionSummary, TurnSummary};
 use crate::salience::{score_session, score_turn, tokenize};
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
@@ -118,14 +116,8 @@ pub fn load_dataset(log_path: &Path, day_filter: Option<NaiveDate>) -> Result<Da
             });
         }
 
-        let started_at = events
-            .first()
-            .map(|l| l.timestamp)
-            .unwrap_or_else(Utc::now);
-        let ended_at = events
-            .last()
-            .map(|l| l.timestamp)
-            .unwrap_or_else(Utc::now);
+        let started_at = events.first().map(|l| l.timestamp).unwrap_or_else(Utc::now);
+        let ended_at = events.last().map(|l| l.timestamp).unwrap_or_else(Utc::now);
 
         let project_context = pick_context(&project_context_counts).unwrap_or_else(|| {
             events

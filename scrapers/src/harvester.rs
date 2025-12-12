@@ -1,15 +1,19 @@
-use crate::cursor::{fingerprint, read_cursor_messages};
+use crate::claude::parse_claude_line;
+use crate::codex::parse_codex_line;
+use crate::config::ContrailConfig;
+use crate::cursor::{fingerprint, read_cursor_messages, timestamp_from_metadata};
 use crate::log_writer::LogWriter;
 use crate::notifier::Notifier;
 use crate::sentry::Sentry;
 use crate::types::{Interaction, MasterLog};
-use anyhow::{Context, Result};
+use anyhow::Result;
+use chrono::DateTime;
 use chrono::{Datelike, Local, Utc};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -20,21 +24,22 @@ pub struct Harvester {
     sentry: Sentry,
     notifier: Notifier,
     log_writer: LogWriter,
+    config: ContrailConfig,
 }
 
 impl Harvester {
-    pub fn new(log_writer: LogWriter) -> Self {
+    pub fn new(log_writer: LogWriter, config: ContrailConfig) -> Self {
         Self {
             sentry: Sentry::new(),
             notifier: Notifier::new(),
             log_writer,
+            config,
         }
     }
 
     pub async fn run_cursor_watcher(&self) -> Result<()> {
         println!("Starting Universal Cursor Watcher...");
-        let home = dirs::home_dir().context("Could not find home directory")?;
-        let cursor_base = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+        let cursor_base = self.config.cursor_storage.clone();
 
         if !cursor_base.exists() {
             println!("Cursor workspaceStorage not found.");
@@ -119,7 +124,9 @@ impl Harvester {
             }
 
             // Check silence
-            if generating && last_activity.elapsed() > Duration::from_secs(5) {
+            if generating
+                && last_activity.elapsed() > Duration::from_secs(self.config.cursor_silence_secs)
+            {
                 generating = false;
                 println!("Cursor finished generating in {}.", active_project);
                 self.notifier.send_notification(
@@ -136,6 +143,7 @@ impl Harvester {
                             let snapshot = fingerprint(&messages);
                             if Some(snapshot) != last_cursor_snapshot {
                                 for message in messages {
+                                    let ts = timestamp_from_metadata(&message.metadata);
                                     self.log_interaction_with_metadata(
                                         "cursor",
                                         &workspace_hash,
@@ -143,6 +151,7 @@ impl Harvester {
                                         &message.content,
                                         &message.role,
                                         message.metadata,
+                                        ts,
                                     )
                                     .await?;
                                 }
@@ -202,9 +211,10 @@ impl Harvester {
                     "cursor",
                     &workspace_hash, // Use Hash as Session ID
                     &active_project,
-                    "Cursor generation completed (Text capture pending DB schema analysis)",
-                    "assistant",
+                    "Session Ended",
+                    "system",
                     extra_metadata,
+                    Some(Utc::now()),
                 )
                 .await?;
             }
@@ -215,10 +225,11 @@ impl Harvester {
 
     pub async fn run_codex_watcher(&self) -> Result<()> {
         println!("Starting Codex Watcher...");
-        let home = dirs::home_dir().context("Could not find home directory")?;
-        let codex_root = home.join(".codex/sessions");
+        let codex_root = self.config.codex_root.clone();
         let mut file_positions: HashMap<PathBuf, u64> = HashMap::new();
         let mut file_activity: HashMap<PathBuf, Instant> = HashMap::new();
+        let mut file_generating: HashMap<PathBuf, bool> = HashMap::new();
+        let mut file_saw_token_count: HashMap<PathBuf, bool> = HashMap::new();
 
         loop {
             let now = Local::now();
@@ -250,55 +261,35 @@ impl Harvester {
                 for (path, pos) in file_positions.iter_mut() {
                     if let Ok(file) = fs::File::open(path) {
                         let mut reader = BufReader::new(file);
+                        let current_len = reader.get_ref().metadata().map(|m| m.len()).unwrap_or(0);
+                        if current_len < *pos {
+                            // file truncated/rotated
+                            *pos = 0;
+                        }
                         reader.seek(SeekFrom::Start(*pos))?;
                         let mut line = String::new();
-                        let mut saw_token_count = false;
-                        let mut generating = false;
+                        let mut saw_token_count = *file_saw_token_count.get(path).unwrap_or(&false);
 
                         while reader.read_line(&mut line)? > 0 {
                             let len = line.len() as u64;
                             let mut project_context = "Codex Session".to_string();
                             let mut extra_metadata = Map::new();
+                            let mut role = "assistant".to_string();
+                            let mut content = line.clone();
+                            let mut timestamp: Option<DateTime<Utc>> = None;
 
-                            if let Ok(json) = serde_json::from_str::<Value>(&line) {
-                                if let Some(payload) = json.get("payload") {
-                                    if let Some(cwd) = payload.get("cwd").and_then(|s| s.as_str()) {
-                                        project_context = cwd.to_string();
-                                        extra_metadata.insert(
-                                            "cwd".to_string(),
-                                            Value::String(project_context.clone()),
-                                        );
-                                    }
-                                    if let Some(model) =
-                                        payload.get("model").and_then(|s| s.as_str())
-                                    {
-                                        extra_metadata.insert(
-                                            "model".to_string(),
-                                            Value::String(model.to_string()),
-                                        );
-                                    }
-                                    if let Some(info) = payload.get("info") {
-                                        append_usage(&mut extra_metadata, info);
+                            if let Some(parsed) = parse_codex_line(&line) {
+                                if let Some(cwd) = parsed.project_context {
+                                    project_context = cwd.clone();
+                                }
+                                role = parsed.role;
+                                content = parsed.content;
+                                timestamp = parsed.timestamp;
+                                for (k, v) in parsed.metadata {
+                                    if k.starts_with("usage_") {
                                         saw_token_count = true;
                                     }
-                                    if let Some(metrics) = payload.get("metrics") {
-                                        append_metrics(&mut extra_metadata, metrics);
-                                    }
-                                }
-                                if let Some(turn_context) = json.get("turn_context") {
-                                    if let Some(cwd) =
-                                        turn_context.get("cwd").and_then(|s| s.as_str())
-                                    {
-                                        project_context = cwd.to_string();
-                                        extra_metadata.insert(
-                                            "cwd".to_string(),
-                                            Value::String(project_context.clone()),
-                                        );
-                                    }
-                                }
-                                if let Some(ts) = extract_timestamp_value(&json) {
-                                    extra_metadata
-                                        .insert("timestamp".to_string(), Value::String(ts));
+                                    extra_metadata.insert(k, v);
                                 }
                             }
 
@@ -306,50 +297,57 @@ impl Harvester {
                                 "codex-cli",
                                 path.file_name().unwrap().to_str().unwrap(),
                                 &project_context,
-                                &line,
-                                "assistant",
+                                &content,
+                                &role,
                                 extra_metadata,
+                                timestamp,
                             )
                             .await?;
 
                             *pos += len;
                             line.clear();
-                            generating = true;
+                            file_generating.insert(path.clone(), true);
                             file_activity.insert(path.clone(), Instant::now());
                         }
 
-                        if generating {
-                            if let Some(last) = file_activity.get(path) {
-                                if last.elapsed() > Duration::from_secs(3) {
-                                    let mut completion_metadata = Map::new();
-                                    completion_metadata.insert(
-                                        "interrupted".to_string(),
-                                        Value::Bool(!saw_token_count),
-                                    );
-                                    self.notifier.send_notification(
-                                        "AI Task Complete",
-                                        "Codex CLI finished.",
-                                    );
-                                    self.log_interaction_with_metadata(
-                                        "codex-cli",
-                                        path.file_name().unwrap().to_str().unwrap(),
-                                        "Codex Session",
-                                        "Session Ended",
-                                        "system",
-                                        completion_metadata,
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
+                        file_saw_token_count.insert(path.clone(), saw_token_count);
                     } else {
                         to_remove.push(path.clone());
+                    }
+                }
+
+                // Session end detection across iterations
+                for (path, last) in file_activity.clone() {
+                    if !file_generating.get(&path).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    if last.elapsed() > Duration::from_secs(self.config.codex_silence_secs) {
+                        let saw_tokens = file_saw_token_count.get(&path).copied().unwrap_or(false);
+                        let mut completion_metadata = Map::new();
+                        completion_metadata
+                            .insert("interrupted".to_string(), Value::Bool(!saw_tokens));
+                        self.notifier
+                            .send_notification("AI Task Complete", "Codex CLI finished.");
+                        self.log_interaction_with_metadata(
+                            "codex-cli",
+                            path.file_name().unwrap().to_str().unwrap(),
+                            "Codex Session",
+                            "Session Ended",
+                            "system",
+                            completion_metadata,
+                            Some(Utc::now()),
+                        )
+                        .await?;
+                        file_generating.insert(path.clone(), false);
+                        file_saw_token_count.insert(path.clone(), false);
                     }
                 }
 
                 for path in to_remove {
                     file_positions.remove(&path);
                     file_activity.remove(&path);
+                    file_generating.remove(&path);
+                    file_saw_token_count.remove(&path);
                 }
             }
 
@@ -358,8 +356,7 @@ impl Harvester {
     }
     pub async fn run_antigravity_watcher(&self) -> Result<()> {
         println!("Starting Antigravity Watcher...");
-        let home = dirs::home_dir().context("Could not find home directory")?;
-        let brain_dir = home.join(".gemini/antigravity/brain");
+        let brain_dir = self.config.antigravity_brain.clone();
 
         // Watch the brain directory for the latest session
         loop {
@@ -402,47 +399,65 @@ impl Harvester {
 
                 if watching {
                     println!("Watching Antigravity Session: {:?}", session_path);
-                    let mut last_task_size = 0;
-                    let mut last_plan_size = 0;
-
-                    // Init sizes
-                    if let Ok(m) = fs::metadata(&task_md) {
-                        last_task_size = m.len();
-                    }
-                    if let Ok(m) = fs::metadata(&plan_md) {
-                        last_plan_size = m.len();
-                    }
+                    let mut last_task_pos = fs::metadata(&task_md).map(|m| m.len()).unwrap_or(0);
+                    let mut last_plan_pos = fs::metadata(&plan_md).map(|m| m.len()).unwrap_or(0);
 
                     loop {
                         if let Ok(Ok(_event)) = rx.try_recv() {
                             // Check task.md
                             if let Ok(metadata) = fs::metadata(&task_md) {
                                 let current_size = metadata.len();
-                                if current_size > last_task_size {
-                                    self.log_interaction(
-                                        "antigravity",
-                                        session_path.file_name().unwrap().to_str().unwrap(),
-                                        "Antigravity Brain",
-                                        "Task updated",
-                                        "assistant",
-                                    )
-                                    .await?;
-                                    last_task_size = current_size;
+                                if current_size < last_task_pos {
+                                    last_task_pos = 0;
+                                }
+                                if current_size > last_task_pos {
+                                    if let Ok(mut file) = fs::File::open(&task_md) {
+                                        let mut reader = BufReader::new(&mut file);
+                                        let _ = reader.seek(SeekFrom::Start(last_task_pos));
+                                        let mut buf = String::new();
+                                        let _ = reader.read_to_string(&mut buf);
+                                        if !buf.trim().is_empty() {
+                                            self.log_interaction_with_metadata(
+                                                "antigravity",
+                                                session_path.file_name().unwrap().to_str().unwrap(),
+                                                "Antigravity Brain",
+                                                &buf,
+                                                "assistant",
+                                                Map::new(),
+                                                Some(Utc::now()),
+                                            )
+                                            .await?;
+                                        }
+                                    }
+                                    last_task_pos = current_size;
                                 }
                             }
                             // Check implementation_plan.md
                             if let Ok(metadata) = fs::metadata(&plan_md) {
                                 let current_size = metadata.len();
-                                if current_size > last_plan_size {
-                                    self.log_interaction(
-                                        "antigravity",
-                                        session_path.file_name().unwrap().to_str().unwrap(),
-                                        "Antigravity Brain",
-                                        "Implementation Plan updated",
-                                        "assistant",
-                                    )
-                                    .await?;
-                                    last_plan_size = current_size;
+                                if current_size < last_plan_pos {
+                                    last_plan_pos = 0;
+                                }
+                                if current_size > last_plan_pos {
+                                    if let Ok(mut file) = fs::File::open(&plan_md) {
+                                        let mut reader = BufReader::new(&mut file);
+                                        let _ = reader.seek(SeekFrom::Start(last_plan_pos));
+                                        let mut buf = String::new();
+                                        let _ = reader.read_to_string(&mut buf);
+                                        if !buf.trim().is_empty() {
+                                            self.log_interaction_with_metadata(
+                                                "antigravity",
+                                                session_path.file_name().unwrap().to_str().unwrap(),
+                                                "Antigravity Brain",
+                                                &buf,
+                                                "assistant",
+                                                Map::new(),
+                                                Some(Utc::now()),
+                                            )
+                                            .await?;
+                                        }
+                                    }
+                                    last_plan_pos = current_size;
                                 }
                             }
                         }
@@ -451,6 +466,7 @@ impl Harvester {
                         // Check for newer sessions occasionally
                         if Utc::now().timestamp() % 10 == 0 {
                             if let Ok(entries) = fs::read_dir(&brain_dir) {
+                                let mut found_newer = false;
                                 for entry in entries.flatten() {
                                     if let Ok(meta) = entry.metadata() {
                                         if let Ok(mod_time) = meta.modified() {
@@ -458,10 +474,14 @@ impl Harvester {
                                                 println!(
                                                     "Found newer Antigravity session, switching..."
                                                 );
-                                                break; // Break inner loop
+                                                found_newer = true;
+                                                break;
                                             }
                                         }
                                     }
+                                }
+                                if found_newer {
+                                    break;
                                 }
                             }
                         }
@@ -474,8 +494,7 @@ impl Harvester {
 
     pub async fn run_claude_watcher(&self) -> Result<()> {
         println!("Starting Claude Watcher...");
-        let home = dirs::home_dir().context("Could not find home directory")?;
-        let claude_history = home.join(".claude/history.jsonl");
+        let claude_history = self.config.claude_history.clone();
 
         if claude_history.exists() {
             println!("Watching Claude History: {:?}", claude_history);
@@ -490,60 +509,47 @@ impl Harvester {
 
             loop {
                 let current_len = fs::metadata(&claude_history)?.len();
+                if current_len < pos {
+                    pos = 0;
+                }
                 if current_len > pos {
                     reader.seek(SeekFrom::Start(pos))?;
                     let mut line = String::new();
                     while reader.read_line(&mut line)? > 0 {
-                        println!("New Claude line: {}", line.trim());
+                        println!("New Claude line");
                         let mut metadata = Map::new();
                         let mut project_context = "Claude Global".to_string();
                         let mut role = "user_or_assistant".to_string();
                         let mut session_id = "history".to_string();
-                        if let Ok(json) = serde_json::from_str::<Value>(&line) {
-                            if let Some(conv) = json.get("conversation_id").and_then(|c| c.as_str())
-                            {
-                                session_id = conv.to_string();
-                                metadata.insert(
-                                    "conversation_id".to_string(),
-                                    Value::String(conv.to_string()),
-                                );
+                        let mut content = line.clone();
+                        let mut timestamp: Option<DateTime<Utc>> = None;
+
+                        if let Some(parsed) = parse_claude_line(&line) {
+                            role = parsed.role;
+                            content = parsed.content;
+                            timestamp = parsed.timestamp;
+                            if let Some(id) = parsed.session_id {
+                                session_id = id.clone();
                             }
-                            if let Some(model) = json.get("model").and_then(|m| m.as_str()) {
-                                metadata
-                                    .insert("model".to_string(), Value::String(model.to_string()));
-                            }
-                            if let Some(usage) = json.get("usage") {
-                                append_usage(&mut metadata, usage);
-                            }
-                            if let Some(metrics) = json.get("metrics") {
-                                append_metrics(&mut metadata, metrics);
-                            }
-                            if let Some(r) = json.get("role").and_then(|r| r.as_str()) {
-                                role = r.to_string();
-                            }
-                            if let Some(cwd) = extract_claude_cwd(&json) {
+                            if let Some(cwd) = parsed.project_context {
                                 project_context = cwd.clone();
-                                metadata.insert("cwd".to_string(), Value::String(cwd.clone()));
                                 cwd_cache.insert(session_id.clone(), cwd);
                             } else if let Some(cached) = cwd_cache.get(&session_id) {
                                 project_context = cached.clone();
-                                metadata.insert("cwd".to_string(), Value::String(cached.clone()));
-                            } else if let Some(conv) =
-                                json.get("conversation_id").and_then(|c| c.as_str())
-                            {
-                                project_context = conv.to_string();
                             }
-                            if let Some(ts) = extract_timestamp_value(&json) {
-                                metadata.insert("timestamp".to_string(), Value::String(ts));
+                            for (k, v) in parsed.metadata {
+                                metadata.insert(k, v);
                             }
                         }
+
                         self.log_interaction_with_metadata(
                             "claude-code",
                             &session_id,
                             &project_context,
-                            &line,
-                            &role, // Claude history might mix roles
+                            &content,
+                            &role,
                             metadata,
+                            timestamp,
                         )
                         .await?;
 
@@ -556,7 +562,10 @@ impl Harvester {
                     }
                 }
 
-                if generating && last_activity.elapsed() > Duration::from_secs(5) {
+                if generating
+                    && last_activity.elapsed()
+                        > Duration::from_secs(self.config.claude_silence_secs)
+                {
                     generating = false;
                     self.notifier
                         .send_notification("AI Task Complete", "Claude Code finished.");
@@ -570,25 +579,7 @@ impl Harvester {
         Ok(())
     }
 
-    async fn log_interaction(
-        &self,
-        source: &str,
-        session: &str,
-        project: &str,
-        content: &str,
-        role: &str,
-    ) -> Result<()> {
-        self.log_interaction_with_metadata(
-            source,
-            session,
-            project,
-            content,
-            role,
-            serde_json::Map::new(),
-        )
-        .await
-    }
-
+    #[allow(clippy::too_many_arguments)]
     async fn log_interaction_with_metadata(
         &self,
         source: &str,
@@ -597,6 +588,7 @@ impl Harvester {
         content: &str,
         role: &str,
         extra_metadata: serde_json::Map<String, serde_json::Value>,
+        timestamp: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let (clean_content, flags) = self.sentry.scan_and_redact(content);
 
@@ -617,14 +609,10 @@ impl Harvester {
                     // Simple heuristic: if clipboard contains a significant chunk of the content
                     // or if content is short and matches exactly.
                     let threshold = 20; // min chars to check
-                    if clean_content.len() > threshold
-                        && clip_text.contains(&clean_content[..threshold])
-                    {
-                        metadata.insert(
-                            "copied_to_clipboard".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                    } else if clean_content == clip_text {
+                    let copied = (clean_content.len() > threshold
+                        && clip_text.contains(&clean_content[..threshold]))
+                        || clean_content == clip_text;
+                    if copied {
                         metadata.insert(
                             "copied_to_clipboard".to_string(),
                             serde_json::Value::Bool(true),
@@ -641,7 +629,7 @@ impl Harvester {
 
         let log = MasterLog {
             event_id: Uuid::new_v4(),
-            timestamp: Utc::now(),
+            timestamp: timestamp.unwrap_or_else(Utc::now),
             source_tool: source.to_string(),
             project_context: project.to_string(),
             session_id: session.to_string(),
@@ -658,99 +646,4 @@ impl Harvester {
         self.log_writer.write(log)?;
         Ok(())
     }
-}
-
-fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
-    if let Some(obj) = value.as_object() {
-        for (k, v) in obj {
-            match k.as_str() {
-                "total" | "total_tokens" | "totalTokens" => {
-                    insert_scalar(meta, "usage_total_tokens", v)
-                }
-                "prompt" | "prompt_tokens" | "promptTokens" | "input" => {
-                    insert_scalar(meta, "usage_prompt_tokens", v)
-                }
-                "completion" | "completion_tokens" | "completionTokens" | "output" => {
-                    insert_scalar(meta, "usage_completion_tokens", v)
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-fn append_metrics(meta: &mut Map<String, Value>, value: &Value) {
-    if let Some(obj) = value.as_object() {
-        for (k, v) in obj {
-            match k.as_str() {
-                "latency" | "latencyMs" | "latency_ms" => insert_scalar(meta, "latency_ms", v),
-                "duration" | "durationMs" | "duration_ms" => insert_scalar(meta, "duration_ms", v),
-                "wallTime" | "wall_time_ms" => insert_scalar(meta, "wall_time_ms", v),
-                _ => {}
-            }
-        }
-    }
-}
-
-fn insert_scalar(meta: &mut Map<String, Value>, key: &str, value: &Value) {
-    match value {
-        Value::String(s) => {
-            meta.insert(key.to_string(), Value::String(s.clone()));
-        }
-        Value::Number(n) => {
-            meta.insert(key.to_string(), Value::Number(n.clone()));
-        }
-        Value::Bool(b) => {
-            meta.insert(key.to_string(), Value::Bool(*b));
-        }
-        _ => {}
-    }
-}
-
-fn extract_timestamp_value(json: &Value) -> Option<String> {
-    json.get("timestamp")
-        .or_else(|| json.get("created_at"))
-        .or_else(|| json.get("createdAt"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-fn extract_claude_cwd(json: &Value) -> Option<String> {
-    let candidate_keys = [
-        "cwd",
-        "working_dir",
-        "workdir",
-        "project_root",
-        "path",
-        "root",
-    ];
-
-    if let Some(obj) = json.as_object() {
-        for key in candidate_keys {
-            if let Some(val) = obj.get(key).and_then(|v| v.as_str()) {
-                if looks_like_path(val) {
-                    return Some(val.to_string());
-                }
-            }
-        }
-        if let Some(tool_use) = obj.get("tool_use").and_then(|v| v.as_object()) {
-            if let Some(args) = tool_use.get("arguments").and_then(|v| v.as_str()) {
-                // naive scan for a path-like token
-                if let Some(pos) = args.find("/Users/") {
-                    let snippet = &args[pos..];
-                    if let Some(end) = snippet.find('"') {
-                        let path = &snippet[..end];
-                        if looks_like_path(path) {
-                            return Some(path.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-fn looks_like_path(val: &str) -> bool {
-    val.starts_with('/') && val.len() > 4
 }
