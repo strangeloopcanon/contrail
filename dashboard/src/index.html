@@ -177,6 +177,27 @@
             overflow-y: auto;
         }
 
+        .project-group {
+            padding: 10px 14px;
+            background: rgba(148, 163, 184, 0.08);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .project-group .count {
+            text-transform: none;
+            letter-spacing: normal;
+            font-weight: 700;
+        }
+
         .session-row {
             cursor: pointer;
             padding: 12px 14px;
@@ -300,9 +321,16 @@
                     <option value="antigravity">Antigravity</option>
                     <option value="claude-code">Claude</option>
                 </select>
+                <select id="projectFilter">
+                    <option value="all">All Projects</option>
+                </select>
                 <select id="modeSelect">
                     <option value="tail">Tail (fast)</option>
                     <option value="all">All (slow)</option>
+                </select>
+                <select id="viewSelect">
+                    <option value="conversation" selected>Conversation</option>
+                    <option value="full">Full Trace</option>
                 </select>
                 <select id="limitSelect">
                     <option value="100">Last 100</option>
@@ -342,16 +370,29 @@
 
     <script>
         let currentFilter = 'all';
+        let currentProject = 'all';
         let currentMode = 'tail';
+        let currentView = 'conversation';
         let currentLimit = 200;
+        let allSessions = [];
         let sessions = [];
         let selectedKey = null;
         let pollTimer = null;
 
         document.getElementById('toolFilter').addEventListener('change', (e) => {
             currentFilter = e.target.value;
+            currentProject = 'all';
+            document.getElementById('projectFilter').value = 'all';
             selectedKey = null;
             fetchAndRender();
+        });
+
+        document.getElementById('projectFilter').addEventListener('change', (e) => {
+            currentProject = e.target.value;
+            selectedKey = null;
+            applyProjectFilter();
+            renderSessionsList();
+            renderConversation();
         });
 
         document.getElementById('modeSelect').addEventListener('change', (e) => {
@@ -365,6 +406,11 @@
         document.getElementById('limitSelect').addEventListener('change', (e) => {
             currentLimit = Number(e.target.value || 200);
             fetchAndRender();
+        });
+
+        document.getElementById('viewSelect').addEventListener('change', (e) => {
+            currentView = e.target.value;
+            renderConversation();
         });
 
         document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -410,14 +456,63 @@
             try {
                 const response = await fetch(buildApiUrl());
                 const logs = await response.json();
-                sessions = groupSessions(logs);
-                if (!selectedKey || !sessions.some(s => s.key === selectedKey)) {
-                    selectedKey = sessions[0]?.key || null;
-                }
+                allSessions = groupSessions(logs);
+                updateProjectFilter();
+                applyProjectFilter();
                 renderSessionsList();
                 renderConversation();
             } catch (e) {
                 console.error("Failed to fetch logs", e);
+            }
+        }
+
+        function updateProjectFilter() {
+            const select = document.getElementById('projectFilter');
+            const prev = currentProject || 'all';
+
+            const map = new Map();
+            allSessions.forEach((s) => {
+                const key = s.projectKey || s.project || 'Unknown';
+                const entry = map.get(key) || { key, label: s.projectLabel || key, count: 0, last: 0 };
+                entry.count += 1;
+                entry.last = Math.max(entry.last, s.sortKey || 0);
+                map.set(key, entry);
+            });
+
+            const items = Array.from(map.values());
+            items.sort((a, b) => (b.last || 0) - (a.last || 0));
+
+            select.innerHTML = '';
+            const optAll = document.createElement('option');
+            optAll.value = 'all';
+            optAll.textContent = 'All Projects';
+            select.appendChild(optAll);
+
+            items.forEach((p) => {
+                const opt = document.createElement('option');
+                opt.value = p.key;
+                opt.textContent = `${p.label} (${p.count})`;
+                opt.title = p.key;
+                select.appendChild(opt);
+            });
+
+            if (prev !== 'all' && Array.from(select.options).some((o) => o.value === prev)) {
+                currentProject = prev;
+                select.value = prev;
+            } else {
+                currentProject = 'all';
+                select.value = 'all';
+            }
+        }
+
+        function applyProjectFilter() {
+            if (currentProject === 'all') {
+                sessions = allSessions;
+            } else {
+                sessions = allSessions.filter((s) => (s.projectKey || s.project) === currentProject);
+            }
+            if (!selectedKey || !sessions.some((s) => s.key === selectedKey)) {
+                selectedKey = sessions[0]?.key || null;
             }
         }
 
@@ -465,6 +560,15 @@
                     s.originalStart = null;
                 }
 
+                if (s.tool === 'codex-cli' && s.imported && isGenericProjectContext(s.project)) {
+                    const inferred = inferCodexProjectContext(s.interactions);
+                    if (inferred) {
+                        s.project = inferred;
+                    }
+                }
+                s.projectKey = s.project || 'Unknown';
+                s.projectLabel = projectLabelFromContext(s.projectKey);
+
                 s.startedAt = s.interactions[0]?.timestamp || s.ingestedStartedAt || '';
                 s.endedAt = s.interactions[s.interactions.length - 1]?.timestamp || s.ingestedEndedAt || '';
 
@@ -492,9 +596,43 @@
             }
 
             summary.textContent = `${sessions.length} sessions`;
-            sessions.forEach((s) => {
+            const showGroups = currentProject === 'all';
+            const groups = new Map();
+            if (showGroups) {
+                sessions.forEach((s) => {
+                    const key = s.projectKey || 'Unknown';
+                    const entry = groups.get(key) || {
+                        key,
+                        label: s.projectLabel || key,
+                        sessions: [],
+                        last: 0,
+                    };
+                    entry.sessions.push(s);
+                    entry.last = Math.max(entry.last, s.sortKey || 0);
+                    groups.set(key, entry);
+                });
+            }
+
+            const orderedGroups = showGroups
+                ? Array.from(groups.values()).sort((a, b) => (b.last || 0) - (a.last || 0))
+                : [{ key: currentProject, label: currentProject, sessions }];
+
+            orderedGroups.forEach((g) => {
+                if (showGroups) {
+                    const header = document.createElement('div');
+                    header.className = 'project-group';
+                    header.title = g.key;
+                    header.innerHTML = `
+                        <span>${escapeHtml(g.label || g.key)}</span>
+                        <span class="count">${escapeHtml(String(g.sessions.length))}</span>
+                    `;
+                    container.appendChild(header);
+                }
+
+                g.sessions.forEach((s) => {
                 const row = document.createElement('div');
                 row.className = `session-row${s.key === selectedKey ? ' active' : ''}`;
+                row.title = s.projectKey || s.project || '';
                 row.addEventListener('click', () => {
                     selectedKey = s.key;
                     renderSessionsList();
@@ -513,12 +651,13 @@
                 row.innerHTML = `
                     <span class="tool-badge ${escapeHtml(s.tool)}">${escapeHtml(s.tool)}</span>
                     <div class="session-row-main">
-                        <div class="session-row-title">${escapeHtml(s.project || 'Unknown')}</div>
+                        <div class="session-row-title">${escapeHtml(s.projectLabel || s.project || 'Unknown')}</div>
                         <div class="session-row-meta">${metaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>•</span>')}</div>
                     </div>
                     <span class="pill">${escapeHtml(shortSessionId(s.sessionId))}</span>
                 `;
                 container.appendChild(row);
+                });
             });
         }
 
@@ -530,22 +669,27 @@
             if (!session) {
                 title.textContent = 'Conversation';
                 subtitle.textContent = 'Select a session';
+                subtitle.removeAttribute('title');
                 convo.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a session to view interactions.</div>';
                 return;
             }
 
             title.textContent = `${session.tool} • ${shortSessionId(session.sessionId)}`;
             if (session.tool === 'codex-cli' && session.imported && session.originalStart) {
-                const importedRange = session.startedAt
-                    ? `imported: ${formatDateTime(session.startedAt)} → ${formatDateTime(session.endedAt)}`
-                    : 'imported';
-                subtitle.textContent = `${session.project || 'Unknown'} • original: ${formatDateTime(session.originalStart)} • ${importedRange} • (per-message timestamps often missing)`;
+                const ingested = session.ingestedEndedAt ? formatDateTime(session.ingestedEndedAt) : '';
+                subtitle.textContent = `${session.projectLabel || session.project || 'Unknown'} • original: ${formatDateTime(session.originalStart)}${ingested ? ` • ingested: ${ingested}` : ''} • (per-message timestamps often missing)`;
             } else {
-                subtitle.textContent = `${session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
+                subtitle.textContent = `${session.projectLabel || session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
             }
+            subtitle.title = session.projectKey || session.project || '';
+
+            const displayed =
+                currentView === 'conversation'
+                    ? session.interactions.filter((i) => !isToolTrace(i.content))
+                    : session.interactions;
 
             let html = '';
-            session.interactions.forEach((i, idx) => {
+            displayed.forEach((i, idx) => {
                 const roleClass = roleToClass(i.role);
                 const roleLabel = escapeHtml((i.role || 'unknown').toUpperCase());
                 const ts = eventTimestamp(session, i);
@@ -643,24 +787,123 @@
             return true;
         }
 
+        function isToolTrace(content) {
+            const parsed = tryParseJson(content);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+            const type = String(parsed.type || '').toLowerCase();
+            if (type === 'function_call' || type === 'function_call_output' || type === 'local_shell_call') {
+                return true;
+            }
+            if (parsed.record_type === 'state') return true;
+            return false;
+        }
+
         function eventTimestamp(session, interaction) {
             const ts = interaction?.timestamp || '';
             if (!ts) return '';
             if (session.tool !== 'codex-cli' || !session.imported) {
                 return formatTimestamp(ts);
             }
-            if (!session.originalStart) {
+            if (interaction?.metadata?.timestamp_inferred) {
                 return '';
             }
-            const d = new Date(ts);
-            if (Number.isNaN(d.getTime())) {
-                return '';
-            }
-            const diffMs = Math.abs(d.getTime() - session.originalStart.getTime());
-            if (diffMs > 24 * 60 * 60 * 1000) {
+            if (!interaction?.metadata?.original_timestamp) {
                 return '';
             }
             return formatTimestamp(ts);
+        }
+
+        function isGenericProjectContext(project) {
+            const p = String(project || '').trim();
+            return !p || p === 'Imported History' || p === 'Codex Session' || p === 'Unknown';
+        }
+
+        function projectLabelFromContext(projectContext) {
+            const s = String(projectContext || '').trim();
+            if (!s) return 'Unknown';
+            if (s.startsWith('/')) {
+                const parts = s.split('/').filter(Boolean);
+                return parts[parts.length - 1] || s;
+            }
+            return s;
+        }
+
+        function inferCodexProjectContext(interactions) {
+            const reCwd = /Current working directory:\\s*([^\\n\\r]+)/i;
+            const reGitC = /\\bgit\\s+-C\\s+('[^']+'|\"[^\"]+\"|\\S+)/;
+            const reCd = /\\bcd\\s+('[^']+'|\"[^\"]+\"|[^&;\\n]+)/;
+            const rePath = /(\\/(?:Users|Volumes|private|opt|tmp)\\/[^\\s\"'<>\\)\\]\\}\\,;]+)/;
+
+            const max = Math.min(interactions.length, 250);
+            for (let idx = 0; idx < max; idx++) {
+                const interaction = interactions[idx];
+                const metaCwd = interaction?.metadata?.cwd;
+                if (typeof metaCwd === 'string' && metaCwd.trim()) {
+                    return normalizeProjectPath(metaCwd.trim());
+                }
+
+                const raw = String(interaction?.content || '');
+                const mCwd = raw.match(reCwd);
+                if (mCwd && mCwd[1]) {
+                    return normalizeProjectPath(mCwd[1]);
+                }
+
+                const parsed = tryParseJson(raw);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    const cwd = parsed.cwd;
+                    if (typeof cwd === 'string' && cwd.trim()) {
+                        return normalizeProjectPath(cwd.trim());
+                    }
+
+                    const action = parsed.action;
+                    const wd = action && typeof action === 'object' ? action.working_directory : null;
+                    if (typeof wd === 'string' && wd.trim()) {
+                        return normalizeProjectPath(wd.trim());
+                    }
+
+                    const args = parsed.arguments;
+                    if (typeof args === 'string') {
+                        try {
+                            const obj = JSON.parse(args);
+                            const cmd = Array.isArray(obj?.command) ? obj.command.join(' ') : String(obj?.command || '');
+                            const mGit = cmd.match(reGitC);
+                            if (mGit && mGit[1]) return normalizeProjectPath(mGit[1]);
+                            const mCd = cmd.match(reCd);
+                            if (mCd && mCd[1]) return normalizeProjectPath(mCd[1]);
+                        } catch { }
+                    }
+
+                    const out = parsed.output;
+                    if (typeof out === 'string') {
+                        const mOut = out.match(rePath);
+                        if (mOut && mOut[1]) return normalizeProjectPath(mOut[1]);
+                    }
+                }
+
+                const mPath = raw.match(rePath);
+                if (mPath && mPath[1]) {
+                    return normalizeProjectPath(mPath[1]);
+                }
+            }
+
+            return null;
+        }
+
+        function normalizeProjectPath(value) {
+            let s = String(value || '').trim();
+            s = s.replace(/^['"]|['"]$/g, '');
+            s = s.replace(/[)"\\],;}]+$/g, '');
+            if (!s) return null;
+
+            if (s.startsWith('/')) {
+                const parts = s.split('/').filter(Boolean);
+                const last = parts[parts.length - 1] || '';
+                if (last.includes('.') && parts.length > 1) {
+                    parts.pop();
+                    return '/' + parts.join('/');
+                }
+            }
+            return s;
         }
 
         function renderContent(content) {

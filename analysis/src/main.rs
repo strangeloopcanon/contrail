@@ -21,7 +21,8 @@ use context_pack::ContextPackResponse;
 use memory::{MemoryRecord, append_memory, read_memories};
 use memory_blocks::{MemoryBlock, MemoryBlockUpdate};
 use models::{
-    Dataset, ProbeResponse, SalientResponse, SalientSession, SessionsResponse, TurnSummary,
+    Dataset, ProbeResponse, ProjectSummary, ProjectsResponse, SalientResponse, SalientSession,
+    SessionsResponse, TurnSummary,
 };
 use serde::Deserialize;
 use std::env;
@@ -85,6 +86,7 @@ struct DayLimitQuery {
     offset: Option<usize>,
     sort: Option<String>,
     tool: Option<String>,
+    project: Option<String>,
     refresh: Option<bool>,
     q: Option<String>,
 }
@@ -196,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index))
         .route("/health", get(|| async { "ok" }))
         .route("/api/sessions", get(get_sessions))
+        .route("/api/projects", get(get_projects))
         .route("/api/salient", get(get_salient))
         .route("/api/probe", get(get_probe))
         .route("/api/session_events", get(get_session_events))
@@ -282,12 +285,21 @@ async fn get_sessions(
         .clone()
         .filter(|t| !t.trim().is_empty() && t != "all");
 
+    let project_filter = query
+        .project
+        .clone()
+        .filter(|p| !p.trim().is_empty() && p != "all");
+
     let mut sessions: Vec<_> = dataset
         .sessions
         .iter()
         .map(|s| s.summary.clone())
         .filter(|s| match tool_filter.as_deref() {
             Some(t) => s.source_tool == t,
+            None => true,
+        })
+        .filter(|s| match project_filter.as_deref() {
+            Some(p) => s.project_context == p,
             None => true,
         })
         .collect();
@@ -304,6 +316,52 @@ async fn get_sessions(
 
     Ok(Json(SessionsResponse {
         sessions,
+        day: dataset.day_filter,
+    }))
+}
+
+async fn get_projects(
+    State(state): State<AppState>,
+    Query(query): Query<DayLimitQuery>,
+) -> ApiResult<Json<ProjectsResponse>> {
+    let day = parse_day(&query.day)?;
+    let dataset = ensure_dataset(&state, day, query.refresh.unwrap_or(false)).await?;
+
+    let tool_filter = query
+        .tool
+        .clone()
+        .filter(|t| !t.trim().is_empty() && t != "all");
+
+    let mut map: std::collections::HashMap<String, ProjectSummary> =
+        std::collections::HashMap::new();
+    for bundle in &dataset.sessions {
+        let summary = &bundle.summary;
+        if let Some(t) = tool_filter.as_deref()
+            && summary.source_tool != t
+        {
+            continue;
+        }
+
+        let entry = map
+            .entry(summary.project_context.clone())
+            .or_insert(ProjectSummary {
+                project_context: summary.project_context.clone(),
+                session_count: 0,
+                turn_count: 0,
+                last_ended_at: summary.ended_at,
+            });
+        entry.session_count += 1;
+        entry.turn_count += summary.turn_count;
+        if summary.ended_at > entry.last_ended_at {
+            entry.last_ended_at = summary.ended_at;
+        }
+    }
+
+    let mut projects: Vec<ProjectSummary> = map.into_values().collect();
+    projects.sort_by(|a, b| b.last_ended_at.cmp(&a.last_ended_at));
+
+    Ok(Json(ProjectsResponse {
+        projects,
         day: dataset.day_filter,
     }))
 }

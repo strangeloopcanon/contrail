@@ -92,3 +92,17 @@ pub struct ProbeResponse {
 pub struct MemoriesResponse {
     pub memories: Vec<crate::memory::MemoryRecord>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ProjectSummary {
+    pub project_context: String,
+    pub session_count: usize,
+    pub turn_count: usize,
+    pub last_ended_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectsResponse {
+    pub projects: Vec<ProjectSummary>,
+    pub day: Option<NaiveDate>,
+}
