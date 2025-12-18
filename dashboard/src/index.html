@@ -454,12 +454,29 @@
                     if (byTime !== 0) return byTime;
                     return a.seq - b.seq;
                 });
-                s.startedAt = s.interactions[0]?.timestamp || '';
-                s.endedAt = s.interactions[s.interactions.length - 1]?.timestamp || '';
+                s.ingestedStartedAt = s.interactions[0]?.timestamp || '';
+                s.ingestedEndedAt = s.interactions[s.interactions.length - 1]?.timestamp || '';
                 s.imported = s.interactions.some(i => i.metadata && i.metadata.imported);
+
+                if (s.tool === 'codex-cli' && s.imported) {
+                    s.originalStart = inferCodexOriginalStart(s.sessionId, s.interactions);
+                    s.interactions = s.interactions.filter(i => !isCodexSessionHeader(i.content));
+                } else {
+                    s.originalStart = null;
+                }
+
+                s.startedAt = s.interactions[0]?.timestamp || s.ingestedStartedAt || '';
+                s.endedAt = s.interactions[s.interactions.length - 1]?.timestamp || s.ingestedEndedAt || '';
+
+                if (s.tool === 'codex-cli' && s.imported && s.originalStart) {
+                    s.sortKey = s.originalStart.getTime();
+                } else {
+                    const d = new Date(s.endedAt || s.ingestedEndedAt || '');
+                    s.sortKey = Number.isNaN(d.getTime()) ? 0 : d.getTime();
+                }
             });
 
-            sessions.sort((a, b) => (b.endedAt || '').localeCompare(a.endedAt || ''));
+            sessions.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0));
             return sessions;
         }
 
@@ -487,7 +504,11 @@
                 const metaParts = [];
                 metaParts.push(`${s.interactions.length} turns`);
                 if (s.imported) metaParts.push('imported');
-                if (s.endedAt) metaParts.push(formatTimestamp(s.endedAt));
+                if (s.tool === 'codex-cli' && s.imported && s.originalStart) {
+                    metaParts.push(`orig ${formatDateTime(s.originalStart)}`);
+                } else if (s.endedAt) {
+                    metaParts.push(formatTimestamp(s.endedAt));
+                }
 
                 row.innerHTML = `
                     <span class="tool-badge ${escapeHtml(s.tool)}">${escapeHtml(s.tool)}</span>
@@ -514,13 +535,20 @@
             }
 
             title.textContent = `${session.tool} • ${shortSessionId(session.sessionId)}`;
-            subtitle.textContent = `${session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
+            if (session.tool === 'codex-cli' && session.imported && session.originalStart) {
+                const importedRange = session.ingestedStartedAt
+                    ? `imported: ${formatDateTime(session.ingestedStartedAt)} → ${formatDateTime(session.ingestedEndedAt)}`
+                    : 'imported';
+                subtitle.textContent = `${session.project || 'Unknown'} • original: ${formatDateTime(session.originalStart)} • ${importedRange} • (per-message timestamps often missing)`;
+            } else {
+                subtitle.textContent = `${session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
+            }
 
             let html = '';
             session.interactions.forEach((i, idx) => {
                 const roleClass = roleToClass(i.role);
                 const roleLabel = escapeHtml((i.role || 'unknown').toUpperCase());
-                const ts = formatTimestamp(i.timestamp);
+                const ts = eventTimestamp(session, i);
                 const headerRight = `#${idx + 1}${ts ? ` • ${ts}` : ''}`;
 
                 html += `
@@ -561,6 +589,78 @@
             if (!m) return `${hh}:${mm}:${ss}`;
             const frac = (m[1] + '000000').slice(0, 6);
             return `${hh}:${mm}:${ss}.${frac}`;
+        }
+
+        function formatDateTime(value) {
+            if (!value) return '';
+            const d = value instanceof Date ? value : new Date(value);
+            if (Number.isNaN(d.getTime())) return String(value);
+            const yyyy = d.getFullYear();
+            const MM = String(d.getMonth() + 1).padStart(2, '0');
+            const DD = String(d.getDate()).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            const ss = String(d.getSeconds()).padStart(2, '0');
+            return `${yyyy}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+        }
+
+        function inferCodexOriginalStart(sessionId, interactions) {
+            for (const i of interactions) {
+                const maybe = i?.metadata?.session_started_at || i?.metadata?.original_timestamp;
+                if (maybe) {
+                    const d = new Date(maybe);
+                    if (!Number.isNaN(d.getTime())) return d;
+                }
+            }
+
+            for (const i of interactions) {
+                if (!isCodexSessionHeader(i.content)) continue;
+                const parsed = tryParseJson(i.content);
+                const ts = parsed && parsed.timestamp ? parsed.timestamp : null;
+                if (ts) {
+                    const d = new Date(ts);
+                    if (!Number.isNaN(d.getTime())) return d;
+                }
+            }
+
+            return parseRolloutTimestamp(sessionId);
+        }
+
+        function parseRolloutTimestamp(sessionId) {
+            const s = String(sessionId || '');
+            const m = s.match(/rollout-(\\d{4}-\\d{2}-\\d{2})T(\\d{2})-(\\d{2})-(\\d{2})/);
+            if (!m) return null;
+            const iso = `${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`;
+            const d = new Date(iso);
+            return Number.isNaN(d.getTime()) ? null : d;
+        }
+
+        function isCodexSessionHeader(content) {
+            const parsed = tryParseJson(content);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+            if (!parsed.id || !parsed.timestamp) return false;
+            if (parsed.type || parsed.role || parsed.content) return false;
+            return true;
+        }
+
+        function eventTimestamp(session, interaction) {
+            const ts = interaction?.timestamp || '';
+            if (!ts) return '';
+            if (session.tool !== 'codex-cli' || !session.imported) {
+                return formatTimestamp(ts);
+            }
+            if (!session.originalStart) {
+                return '';
+            }
+            const d = new Date(ts);
+            if (Number.isNaN(d.getTime())) {
+                return '';
+            }
+            const diffMs = Math.abs(d.getTime() - session.originalStart.getTime());
+            if (diffMs > 24 * 60 * 60 * 1000) {
+                return '';
+            }
+            return formatTimestamp(ts);
         }
 
         function renderContent(content) {

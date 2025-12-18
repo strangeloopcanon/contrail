@@ -107,6 +107,10 @@ fn import_codex_file(
         .unwrap_or("unknown")
         .to_string();
 
+    let mut session_start_ts: Option<DateTime<Utc>> = None;
+    let mut last_ts: Option<DateTime<Utc>> = None;
+    let mut wrote_session_start = false;
+
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -116,6 +120,17 @@ fn import_codex_file(
                 continue;
             }
         };
+
+        let parsed_json = serde_json::from_str::<Value>(&line).ok();
+        if let Some(value) = parsed_json.as_ref() {
+            if is_codex_session_header(value) {
+                if let Some(ts) = extract_timestamp(value) {
+                    session_start_ts = Some(ts);
+                    last_ts = Some(ts);
+                }
+                continue;
+            }
+        }
 
         let mut metadata = Map::new();
         metadata.insert("imported".to_string(), Value::Bool(true));
@@ -135,9 +150,30 @@ fn import_codex_file(
             for (k, v) in parsed.metadata {
                 metadata.insert(k, v);
             }
-        } else if let Ok(parsed) = serde_json::from_str::<Value>(&line) {
-            timestamp = extract_timestamp(&parsed);
+        } else if let Some(value) = parsed_json.as_ref() {
+            timestamp = extract_timestamp(value);
         }
+
+        if !wrote_session_start {
+            if let Some(session_start) = session_start_ts.as_ref() {
+                metadata.insert(
+                    "session_started_at".to_string(),
+                    Value::String(session_start.to_rfc3339()),
+                );
+                wrote_session_start = true;
+            }
+        }
+
+        let ts = match timestamp {
+            Some(ts) => ts,
+            None => {
+                metadata.insert("timestamp_inferred".to_string(), Value::Bool(true));
+                last_ts
+                    .map(|t| t + chrono::Duration::milliseconds(1))
+                    .unwrap_or_else(Utc::now)
+            }
+        };
+        last_ts = Some(ts);
 
         let (content, flags) = sentry.scan_and_redact(&content);
 
@@ -150,7 +186,7 @@ fn import_codex_file(
 
         let log = MasterLog {
             event_id: Uuid::new_v4(),
-            timestamp: timestamp.unwrap_or_else(Utc::now),
+            timestamp: ts,
             source_tool: "codex-cli".to_string(),
             project_context,
             session_id: session_id.clone(),
@@ -172,6 +208,19 @@ fn import_codex_file(
     }
 
     Ok(())
+}
+
+fn is_codex_session_header(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    if !obj.contains_key("id") || !obj.contains_key("timestamp") {
+        return false;
+    }
+    if obj.contains_key("type") || obj.contains_key("role") || obj.contains_key("content") {
+        return false;
+    }
+    true
 }
 
 fn import_claude_file(
