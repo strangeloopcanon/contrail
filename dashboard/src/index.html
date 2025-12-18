@@ -536,8 +536,8 @@
 
             title.textContent = `${session.tool} • ${shortSessionId(session.sessionId)}`;
             if (session.tool === 'codex-cli' && session.imported && session.originalStart) {
-                const importedRange = session.ingestedStartedAt
-                    ? `imported: ${formatDateTime(session.ingestedStartedAt)} → ${formatDateTime(session.ingestedEndedAt)}`
+                const importedRange = session.startedAt
+                    ? `imported: ${formatDateTime(session.startedAt)} → ${formatDateTime(session.endedAt)}`
                     : 'imported';
                 subtitle.textContent = `${session.project || 'Unknown'} • original: ${formatDateTime(session.originalStart)} • ${importedRange} • (per-message timestamps often missing)`;
             } else {
