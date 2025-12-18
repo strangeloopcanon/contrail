@@ -150,10 +150,10 @@ pub fn to_memory_snippets(
 
     let iter = records.into_iter().rev();
     for r in iter {
-        if let (Some(day_filter), Some(record_day)) = (day, r.day.as_deref()) {
-            if record_day != day_filter.to_string() {
-                continue;
-            }
+        if let (Some(day_filter), Some(record_day)) = (day, r.day.as_deref())
+            && record_day != day_filter.to_string()
+        {
+            continue;
         }
 
         let parsed = r

@@ -30,26 +30,25 @@ fn main() -> Result<()> {
         }
 
         // Drop giant content to avoid blowing up training data
-        if let Some(content) = json.pointer("/interaction/content").and_then(Value::as_str) {
-            if content.len() > 10_000 {
-                continue;
-            }
+        if let Some(content) = json.pointer("/interaction/content").and_then(Value::as_str)
+            && content.len() > 10_000
+        {
+            continue;
         }
 
         // Truncate metadata blobs (e.g., function_call_output)
-        if let Some(obj) = json.get_mut("metadata").and_then(Value::as_object_mut) {
-            if let Some(Value::String(s)) = obj.get_mut("function_call_output") {
-                if s.len() > 2000 {
-                    s.truncate(2000);
-                }
-            }
+        if let Some(obj) = json.get_mut("metadata").and_then(Value::as_object_mut)
+            && let Some(Value::String(function_call_output)) = obj.get_mut("function_call_output")
+            && function_call_output.len() > 2000
+        {
+            function_call_output.truncate(2000);
         }
 
         // Ensure timestamp is RFC3339
-        if let Some(ts) = json.get("timestamp").and_then(Value::as_str) {
-            if DateTime::parse_from_rfc3339(ts).is_err() {
-                json.as_object_mut().map(|o| o.remove("timestamp"));
-            }
+        if let Some(ts) = json.get("timestamp").and_then(Value::as_str)
+            && DateTime::parse_from_rfc3339(ts).is_err()
+        {
+            json.as_object_mut().map(|o| o.remove("timestamp"));
         }
 
         // Deduplicate identical session_id + content hashes

@@ -16,10 +16,10 @@ pub fn probe(
 
     let mut matches = Vec::new();
     for session in &dataset.sessions {
-        if let Some(day_filter) = day.or(dataset.day_filter) {
-            if session.summary.started_at.date_naive() != day_filter {
-                continue;
-            }
+        if let Some(day_filter) = day.or(dataset.day_filter)
+            && session.summary.started_at.date_naive() != day_filter
+        {
+            continue;
         }
 
         for turn in &session.turns {
