@@ -11,10 +11,10 @@ fn main() -> Result<()> {
 
     // 0. Hex Dump first 50 bytes
     print!("Hex: ");
-    for i in 0..50.min(data.len()) {
-        print!("{:02X} ", data[i]);
+    for byte in data.iter().take(50) {
+        print!("{:02X} ", *byte);
     }
-    println!("");
+    println!();
 
     // 1. Try Zstd Decompression
     println!("\n--- Attempting Zstd Decompression ---");

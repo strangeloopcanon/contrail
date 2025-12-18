@@ -42,16 +42,16 @@ async fn index() -> Html<&'static str> {
 
 async fn get_logs(State(state): State<Arc<AppState>>) -> Json<Vec<Value>> {
     let query: LogsQuery = axum::extract::Query::<LogsQuery>::default().0;
-    if query.all.unwrap_or(false) {
-        if let Ok(content) = fs::read_to_string(&state.log_path).await {
-            let mut logs = Vec::new();
-            for line in content.lines() {
-                if let Ok(json) = serde_json::from_str::<Value>(line) {
-                    logs.push(json);
-                }
+    if query.all.unwrap_or(false)
+        && let Ok(content) = fs::read_to_string(&state.log_path).await
+    {
+        let mut logs = Vec::new();
+        for line in content.lines() {
+            if let Ok(json) = serde_json::from_str::<Value>(line) {
+                logs.push(json);
             }
-            return Json(logs);
         }
+        return Json(logs);
     }
 
     let mut tail: VecDeque<Value> = VecDeque::with_capacity(200);

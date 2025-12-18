@@ -121,7 +121,7 @@ pub fn load_dataset(log_path: &Path, day_filter: Option<NaiveDate>) -> Result<Da
 
         let project_context = pick_context(&project_context_counts).unwrap_or_else(|| {
             events
-                .get(0)
+                .first()
                 .map(|e| e.project_context.clone())
                 .unwrap_or_else(|| "Unknown".to_string())
         });
