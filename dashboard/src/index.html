@@ -32,9 +32,9 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 16px;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 20px;
+            padding-bottom: 16px;
         }
 
         h1 {
@@ -46,68 +46,92 @@
             display: flex;
             gap: 10px;
             align-items: center;
-        }
-
-        .status {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-        }
-
-        .status.live {
-            color: #4ade80;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
         select {
             background-color: var(--card-bg);
             color: var(--text-primary);
             border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 5px 10px;
+            border-radius: 6px;
+            padding: 6px 10px;
             font-size: 0.9rem;
         }
 
-        .session-list {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        .session-card {
+        button {
             background-color: var(--card-bg);
+            color: var(--text-primary);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
-            transition: border-color 0.2s;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.9rem;
+            cursor: pointer;
         }
 
-        .session-card:hover {
+        button:hover {
             border-color: var(--accent);
         }
 
-        .session-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid var(--border);
+        a.link {
+            color: var(--accent);
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(56, 189, 248, 0.6);
         }
 
-        .session-title {
+        .layout {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 16px;
+            align-items: start;
+        }
+
+        .panel {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 14px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .panel-title {
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .panel-title strong {
+            font-size: 0.95rem;
+            font-weight: 800;
+        }
+
+        .panel-subtitle {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .tool-badge {
             background-color: #334155;
             color: #e2e8f0;
             padding: 3px 10px;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 0.8rem;
             text-transform: uppercase;
-            font-weight: bold;
+            font-weight: 800;
             display: inline-block;
+            white-space: nowrap;
         }
 
         .tool-badge.cursor {
@@ -127,9 +151,76 @@
             background-color: #8b5cf6;
         }
 
-        .session-info {
-            font-size: 0.85rem;
+        .pill {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.35);
             color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .pill.live {
+            border-color: rgba(74, 222, 128, 0.5);
+            color: #4ade80;
+        }
+
+        .pill.slow {
+            border-color: rgba(251, 191, 36, 0.5);
+            color: #fbbf24;
+        }
+
+        .session-list {
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 180px);
+            overflow-y: auto;
+        }
+
+        .session-row {
+            cursor: pointer;
+            padding: 12px 14px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .session-row:hover {
+            background: rgba(56, 189, 248, 0.06);
+        }
+
+        .session-row.active {
+            background: rgba(56, 189, 248, 0.10);
+        }
+
+        .session-row-main {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .session-row-title {
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .session-row-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .conversation {
+            padding: 14px;
+            max-height: calc(100vh - 180px);
+            overflow-y: auto;
         }
 
         .interaction {
@@ -137,7 +228,7 @@
             padding: 12px;
             border-left: 3px solid #334155;
             background-color: rgba(255, 255, 255, 0.02);
-            border-radius: 4px;
+            border-radius: 8px;
         }
 
         .interaction.user {
@@ -148,12 +239,18 @@
             border-left-color: #10b981;
         }
 
+        .interaction.system {
+            border-left-color: #94a3b8;
+        }
+
         .interaction-role {
-            font-size: 0.75rem;
-            text-transform: uppercase;
             color: var(--text-secondary);
-            margin-bottom: 5px;
-            font-weight: bold;
+            margin-bottom: 6px;
+            font-weight: 800;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 10px;
         }
 
         .interaction-content {
@@ -162,38 +259,31 @@
             white-space: pre-wrap;
             overflow-x: auto;
             color: #e2e8f0;
-            max-height: 150px;
+            max-height: 220px;
             overflow-y: auto;
         }
 
-        .metadata {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid var(--border);
+        .interaction-content pre {
+            margin: 0;
+        }
+
+        details.json-details {
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        details.json-details summary {
+            cursor: pointer;
+            font-family: "Menlo", "Monaco", "Courier New", monospace;
             font-size: 0.85rem;
-            color: var(--text-secondary);
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
+            color: #e2e8f0;
+            outline: none;
         }
 
-        .meta-item {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .alert {
-            color: #f87171;
-            font-weight: bold;
-        }
-
-        .effect {
-            color: #4ade80;
-        }
-
-        .clipboard {
-            color: #fbbf24;
+        details.json-details[open] summary {
+            margin-bottom: 8px;
         }
     </style>
 </head>
@@ -210,136 +300,349 @@
                     <option value="antigravity">Antigravity</option>
                     <option value="claude-code">Claude</option>
                 </select>
-                <div class="status live">● Live</div>
+                <select id="modeSelect">
+                    <option value="tail">Tail (fast)</option>
+                    <option value="all">All (slow)</option>
+                </select>
+                <select id="limitSelect">
+                    <option value="100">Last 100</option>
+                    <option value="200" selected>Last 200</option>
+                    <option value="500">Last 500</option>
+                </select>
+                <button id="refreshBtn">Refresh</button>
+                <span id="modePill" class="pill live">Live</span>
+                <a class="link" href="http://127.0.0.1:3210/" target="_blank" rel="noreferrer">Open ADE</a>
             </div>
         </header>
 
-        <div id="session-list" class="session-list">
-            <div style="text-align: center; color: var(--text-secondary);">Loading sessions...</div>
+        <div class="layout">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <strong>Sessions</strong>
+                        <div id="sessionSummary" class="panel-subtitle">Loading…</div>
+                    </div>
+                </div>
+                <div id="sessionList" class="session-list"></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <strong id="conversationTitle">Conversation</strong>
+                        <div id="conversationSubtitle" class="panel-subtitle">Select a session</div>
+                    </div>
+                </div>
+                <div id="conversation" class="conversation">
+                    <div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a session to view interactions.</div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         let currentFilter = 'all';
+        let currentMode = 'tail';
+        let currentLimit = 200;
+        let sessions = [];
+        let selectedKey = null;
+        let pollTimer = null;
 
         document.getElementById('toolFilter').addEventListener('change', (e) => {
             currentFilter = e.target.value;
-            fetchLogs();
+            selectedKey = null;
+            fetchAndRender();
         });
 
-        async function fetchLogs() {
+        document.getElementById('modeSelect').addEventListener('change', (e) => {
+            currentMode = e.target.value;
+            selectedKey = null;
+            updateModePill();
+            resetPolling();
+            fetchAndRender();
+        });
+
+        document.getElementById('limitSelect').addEventListener('change', (e) => {
+            currentLimit = Number(e.target.value || 200);
+            fetchAndRender();
+        });
+
+        document.getElementById('refreshBtn').addEventListener('click', () => {
+            fetchAndRender();
+        });
+
+        function updateModePill() {
+            const pill = document.getElementById('modePill');
+            if (currentMode === 'tail') {
+                pill.textContent = 'Live';
+                pill.className = 'pill live';
+            } else {
+                pill.textContent = 'Slow';
+                pill.className = 'pill slow';
+            }
+        }
+
+        function resetPolling() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+            if (currentMode === 'tail') {
+                pollTimer = setInterval(fetchAndRender, 2000);
+            }
+        }
+
+        function buildApiUrl() {
+            const params = new URLSearchParams();
+            if (currentMode === 'all') {
+                params.set('all', 'true');
+            } else {
+                params.set('limit', String(currentLimit));
+            }
+            if (currentFilter !== 'all') {
+                params.set('tool', currentFilter);
+            }
+            const qs = params.toString();
+            return qs ? `/api/logs?${qs}` : '/api/logs';
+        }
+
+        async function fetchAndRender() {
             try {
-                const response = await fetch('/api/logs');
+                const response = await fetch(buildApiUrl());
                 const logs = await response.json();
-                renderSessions(logs);
+                sessions = groupSessions(logs);
+                if (!selectedKey || !sessions.some(s => s.key === selectedKey)) {
+                    selectedKey = sessions[0]?.key || null;
+                }
+                renderSessionsList();
+                renderConversation();
             } catch (e) {
                 console.error("Failed to fetch logs", e);
             }
         }
 
-        function renderSessions(logs) {
-            // Filter logs by tool
-            let filtered = logs;
-            if (currentFilter !== 'all') {
-                filtered = logs.filter(log => log.source_tool === currentFilter);
-            }
-
-            // Group by session_id
-            const sessions = {};
-            filtered.forEach(log => {
+        function groupSessions(logs) {
+            const byKey = new Map();
+            logs.forEach((log, seq) => {
+                const tool = log.source_tool || 'unknown';
                 const sessionId = log.session_id || 'unknown';
-                if (!sessions[sessionId]) {
-                    sessions[sessionId] = {
-                        id: sessionId,
-                        tool: log.source_tool,
-                        project: log.project_context,
-                        interactions: [],
-                        metadata: log.metadata || {}
-                    };
+                const key = `${tool}:${sessionId}`;
+                if (!byKey.has(key)) {
+                    byKey.set(key, {
+                        key,
+                        tool,
+                        sessionId,
+                        project: log.project_context || 'Unknown',
+                        interactions: []
+                    });
                 }
-                sessions[sessionId].interactions.push({
+                byKey.get(key).interactions.push({
                     role: log.interaction?.role || 'unknown',
                     content: log.interaction?.content || '',
-                    timestamp: log.timestamp,
-                    metadata: log.metadata || {}
+                    timestamp: log.timestamp || '',
+                    metadata: log.metadata || {},
+                    seq
                 });
             });
 
-            // Sort sessions by latest interaction
-            const sessionList = Object.values(sessions).sort((a, b) => {
-                const aLatest = Math.max(...a.interactions.map(i => new Date(i.timestamp)));
-                const bLatest = Math.max(...b.interactions.map(i => new Date(i.timestamp)));
-                return bLatest - aLatest;
+            const sessions = Array.from(byKey.values());
+            sessions.forEach(s => {
+                s.interactions.sort((a, b) => {
+                    const aTs = a.timestamp || '';
+                    const bTs = b.timestamp || '';
+                    const byTime = aTs.localeCompare(bTs);
+                    if (byTime !== 0) return byTime;
+                    return a.seq - b.seq;
+                });
+                s.startedAt = s.interactions[0]?.timestamp || '';
+                s.endedAt = s.interactions[s.interactions.length - 1]?.timestamp || '';
+                s.imported = s.interactions.some(i => i.metadata && i.metadata.imported);
             });
 
-            const container = document.getElementById('session-list');
+            sessions.sort((a, b) => (b.endedAt || '').localeCompare(a.endedAt || ''));
+            return sessions;
+        }
+
+        function renderSessionsList() {
+            const container = document.getElementById('sessionList');
+            const summary = document.getElementById('sessionSummary');
             container.innerHTML = '';
 
-            if (sessionList.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">No sessions found.</div>';
+            if (!sessions.length) {
+                summary.textContent = 'No sessions found.';
+                container.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 14px;">No sessions found.</div>';
                 return;
             }
 
-            sessionList.forEach(session => {
-                const card = document.createElement('div');
-                card.className = 'session-card';
-
-                // Session metadata
-                const firstInteraction = session.interactions[0];
-                const lastInteraction = session.interactions[session.interactions.length - 1];
-                const sessionStart = new Date(firstInteraction.timestamp).toLocaleString();
-                const sessionEnd = new Date(lastInteraction.timestamp).toLocaleString();
-                const cwd = firstInteraction.metadata.cwd || session.metadata.cwd || session.project;
-                const project = session.project || cwd || 'Unknown';
-
-                // Aggregate metadata
-                let hasInterruption = session.interactions.some(i => i.metadata.interrupted);
-                let hasCopied = session.interactions.some(i => i.metadata.copied_to_clipboard);
-                let fileEffects = session.interactions.flatMap(i => i.metadata.file_effects || []);
-                let gitBranch = firstInteraction.metadata.git_branch || '';
-                let model = firstInteraction.metadata.model || session.metadata.model || '';
-
-                let metaHtml = '';
-                if (hasInterruption) metaHtml += `<span class="meta-item alert">⚠️ Interrupted</span>`;
-                if (hasCopied) metaHtml += `<span class="meta-item clipboard">📋 Copied to Clipboard</span>`;
-                if (fileEffects.length > 0) metaHtml += `<span class="meta-item effect">📝 ${fileEffects.length} File Changes</span>`;
-                if (gitBranch) metaHtml += `<span class="meta-item">🌿 ${gitBranch}</span>`;
-                if (cwd) metaHtml += `<span class="meta-item">📂 ${cwd}</span>`;
-                if (model) metaHtml += `<span class="meta-item">🤖 ${model}</span>`;
-
-                // Render interactions
-                let interactionsHtml = '';
-                session.interactions.forEach(interaction => {
-                    const role = interaction.role;
-                    const content = escapeHtml(interaction.content);
-                    const timestamp = new Date(interaction.timestamp).toLocaleTimeString();
-
-                    interactionsHtml += `
-                        <div class="interaction ${role}">
-                            <div class="interaction-role">${role} - ${timestamp}</div>
-                            <div class="interaction-content">${content}</div>
-                        </div>
-                    `;
+            summary.textContent = `${sessions.length} sessions`;
+            sessions.forEach((s) => {
+                const row = document.createElement('div');
+                row.className = `session-row${s.key === selectedKey ? ' active' : ''}`;
+                row.addEventListener('click', () => {
+                    selectedKey = s.key;
+                    renderSessionsList();
+                    renderConversation();
                 });
 
-                card.innerHTML = `
-                    <div class="session-header">
-                            <div class="session-title">
-                                <span class="tool-badge ${session.tool}">${session.tool}</span>
-                                <span class="session-info">📂 ${project}</span>
-                                <span class="session-info">${session.interactions.length} interactions • ${sessionStart}</span>
-                            </div>
-                        </div>
-                    ${interactionsHtml}
-                    ${metaHtml ? `<div class="metadata">${metaHtml}</div>` : ''}
+                const metaParts = [];
+                metaParts.push(`${s.interactions.length} turns`);
+                if (s.imported) metaParts.push('imported');
+                if (s.endedAt) metaParts.push(formatTimestamp(s.endedAt));
+
+                row.innerHTML = `
+                    <span class="tool-badge ${escapeHtml(s.tool)}">${escapeHtml(s.tool)}</span>
+                    <div class="session-row-main">
+                        <div class="session-row-title">${escapeHtml(s.project || 'Unknown')}</div>
+                        <div class="session-row-meta">${metaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>•</span>')}</div>
+                    </div>
+                    <span class="pill">${escapeHtml(shortSessionId(s.sessionId))}</span>
                 `;
-                container.appendChild(card);
+                container.appendChild(row);
             });
+        }
+
+        function renderConversation() {
+            const convo = document.getElementById('conversation');
+            const title = document.getElementById('conversationTitle');
+            const subtitle = document.getElementById('conversationSubtitle');
+            const session = sessions.find(s => s.key === selectedKey);
+            if (!session) {
+                title.textContent = 'Conversation';
+                subtitle.textContent = 'Select a session';
+                convo.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a session to view interactions.</div>';
+                return;
+            }
+
+            title.textContent = `${session.tool} • ${shortSessionId(session.sessionId)}`;
+            subtitle.textContent = `${session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
+
+            let html = '';
+            session.interactions.forEach((i, idx) => {
+                const roleClass = roleToClass(i.role);
+                const roleLabel = escapeHtml((i.role || 'unknown').toUpperCase());
+                const ts = formatTimestamp(i.timestamp);
+                const headerRight = `#${idx + 1}${ts ? ` • ${ts}` : ''}`;
+
+                html += `
+                    <div class="interaction ${roleClass}">
+                        <div class="interaction-role">
+                            <span>${roleLabel}</span>
+                            <span>${escapeHtml(headerRight)}</span>
+                        </div>
+                        ${renderContent(i.content)}
+                    </div>
+                `;
+            });
+            convo.innerHTML = html || '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">No interactions.</div>';
+        }
+
+        function roleToClass(role) {
+            const r = String(role || '').toLowerCase();
+            if (r.includes('user')) return 'user';
+            if (r.includes('assistant')) return 'assistant';
+            return 'system';
+        }
+
+        function shortSessionId(sessionId) {
+            if (!sessionId) return 'unknown';
+            const s = String(sessionId);
+            if (s.length <= 18) return s;
+            return `${s.slice(0, 10)}…${s.slice(-6)}`;
+        }
+
+        function formatTimestamp(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return String(iso);
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            const ss = String(d.getSeconds()).padStart(2, '0');
+            const m = String(iso).match(/\\.(\\d+)Z$/);
+            if (!m) return `${hh}:${mm}:${ss}`;
+            const frac = (m[1] + '000000').slice(0, 6);
+            return `${hh}:${mm}:${ss}.${frac}`;
+        }
+
+        function renderContent(content) {
+            const raw = String(content || '');
+            const parsed = tryParseJson(raw);
+            if (!parsed) {
+                return `<div class="interaction-content"><pre>${escapeHtml(raw)}</pre></div>`;
+            }
+            const summary = summarizeJson(parsed);
+            const pretty = escapeHtml(JSON.stringify(parsed, null, 2));
+            return `
+                <details class="json-details">
+                    <summary>${escapeHtml(summary)}</summary>
+                    <div class="interaction-content"><pre>${pretty}</pre></div>
+                </details>
+            `;
+        }
+
+        function tryParseJson(text) {
+            const s = String(text || '').trim();
+            if (!(s.startsWith('{') || s.startsWith('['))) return null;
+            try {
+                return JSON.parse(s);
+            } catch {
+                return null;
+            }
+        }
+
+        function summarizeJson(obj) {
+            if (!obj || typeof obj !== 'object') return 'JSON';
+            if (obj.type === 'function_call') {
+                const name = obj.name || 'tool';
+                const callId = obj.call_id ? ` (${obj.call_id})` : '';
+                const hint = summarizeToolArgs(obj.arguments);
+                return `tool call: ${name}${callId}${hint ? ` — ${hint}` : ''}`;
+            }
+            if (obj.type === 'function_call_output') {
+                const callId = obj.call_id ? ` (${obj.call_id})` : '';
+                const hint = summarizeFirstLine(obj.output);
+                return `tool output${callId}${hint ? ` — ${hint}` : ''}`;
+            }
+            if (obj.type) return `JSON: ${obj.type}`;
+            if (Array.isArray(obj)) return `JSON array (${obj.length})`;
+            return 'JSON object';
+        }
+
+        function summarizeToolArgs(args) {
+            if (!args) return '';
+            let s = '';
+            if (typeof args === 'string') {
+                s = args;
+                try {
+                    const parsed = JSON.parse(args);
+                    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.command)) {
+                        s = parsed.command.join(' ');
+                    } else {
+                        s = JSON.stringify(parsed);
+                    }
+                } catch { }
+            } else {
+                try {
+                    s = JSON.stringify(args);
+                } catch {
+                    s = String(args);
+                }
+            }
+            s = s.replace(/\\s+/g, ' ').trim();
+            if (s.length > 140) s = s.slice(0, 140) + '…';
+            return s;
+        }
+
+        function summarizeFirstLine(value) {
+            if (value == null) return '';
+            const s = String(value);
+            const first = s.split('\\n')[0].replace(/\\s+/g, ' ').trim();
+            if (!first) return '';
+            return first.length > 140 ? first.slice(0, 140) + '…' : first;
         }
 
         function escapeHtml(text) {
             if (!text) return '';
-            return text
+            return String(text)
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
@@ -347,9 +650,9 @@
                 .replace(/'/g, "&#039;");
         }
 
-        // Poll every 2 seconds
-        fetchLogs();
-        setInterval(fetchLogs, 2000);
+        updateModePill();
+        resetPolling();
+        fetchAndRender();
     </script>
 </body>
 
