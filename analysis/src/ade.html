@@ -380,32 +380,38 @@
 	            <option value="antigravity">antigravity</option>
 	          </select>
 	        </div>
+          <div>
+            <label>Project</label>
+            <select id="sessProject">
+              <option value="all">All</option>
+            </select>
+          </div>
 	        <div>
 	          <label>Day (optional)</label>
 	          <input id="sessDay" placeholder="2025-12-18" />
 	        </div>
-	        <div>
-	          <label>Limit</label>
-	          <input id="sessLimit" type="number" min="1" max="5000" value="200" />
-	        </div>
 	      </div>
 	      <div class="row two">
 	        <div>
-	          <label>Sort</label>
-	          <select id="sessSort">
-	            <option value="recent">recent</option>
-	            <option value="score">score</option>
-	          </select>
+            <label>Limit</label>
+            <input id="sessLimit" type="number" min="1" max="5000" value="200" />
 	        </div>
-	        <div class="actions" style="justify-content: flex-end">
-	          <button class="secondary" id="sessImport">Import history now</button>
-	          <label class="pill">
-	            <input id="sessRefresh" type="checkbox" />
-	            reload log
-	          </label>
-	          <button id="sessLoad">Load sessions</button>
-	        </div>
+          <div>
+            <label>Sort</label>
+            <select id="sessSort">
+              <option value="recent">recent</option>
+              <option value="score">score</option>
+            </select>
+          </div>
 	      </div>
+        <div class="actions" style="justify-content: flex-end">
+          <button class="secondary" id="sessImport">Import history now</button>
+          <label class="pill">
+            <input id="sessRefresh" type="checkbox" />
+            reload log
+          </label>
+          <button id="sessLoad">Load sessions</button>
+        </div>
 	      <div class="session-grid">
 	        <div class="session-list" id="sessionList"></div>
 	        <pre id="sessionOut">Select a session…</pre>
@@ -596,11 +602,15 @@
         const limit = document.getElementById("sessLimit").value;
         const refresh = refreshFromDisk || document.getElementById("sessRefresh").checked;
 
+        await refreshProjects(refresh);
+        const project = document.getElementById("sessProject").value;
+
         const params = new URLSearchParams();
         params.set("sort", sort);
         params.set("limit", limit);
         params.set("tool", tool);
         params.set("refresh", refresh ? "true" : "false");
+        if (project && project !== "all") params.set("project", project);
         if (day) params.set("day", day);
 
         const list = document.getElementById("sessionList");
@@ -618,6 +628,44 @@
           sessions.forEach((s) => list.appendChild(renderSessionItem(s)));
         } catch (e) {
           list.innerHTML = `<div class='muted small' style='padding:10px'>error: ${e.message}</div>`;
+        }
+      }
+
+      async function refreshProjects(refreshFromDisk) {
+        const tool = document.getElementById("sessTool").value;
+        const day = document.getElementById("sessDay").value.trim();
+        const refresh = refreshFromDisk || document.getElementById("sessRefresh").checked;
+        const select = document.getElementById("sessProject");
+
+        const prev = select.value || "all";
+        const params = new URLSearchParams();
+        params.set("tool", tool);
+        params.set("refresh", refresh ? "true" : "false");
+        if (day) params.set("day", day);
+
+        try {
+          const res = await api(`/api/projects?${params.toString()}`);
+          const json = await res.json();
+          const projects = json.projects || [];
+          select.innerHTML = "";
+          const optAll = document.createElement("option");
+          optAll.value = "all";
+          optAll.textContent = "All";
+          select.appendChild(optAll);
+          for (const p of projects) {
+            const opt = document.createElement("option");
+            opt.value = p.project_context;
+            opt.textContent = `${p.project_context} (${p.session_count})`;
+            select.appendChild(opt);
+          }
+
+          if (prev && Array.from(select.options).some((o) => o.value === prev)) {
+            select.value = prev;
+          } else {
+            select.value = "all";
+          }
+        } catch (_) {
+          // best-effort
         }
       }
 
@@ -885,6 +933,13 @@
       });
       document.getElementById("cpCopy").addEventListener("click", copyContextPack);
       document.getElementById("probeRun").addEventListener("click", runProbe);
+      document.getElementById("sessTool").addEventListener("change", async () => {
+        document.getElementById("sessProject").value = "all";
+        await refreshSessions(false);
+      });
+      document.getElementById("sessProject").addEventListener("change", async () => {
+        await refreshSessions(false);
+      });
       document.getElementById("sessLoad").addEventListener("click", async () => {
         await refreshSessions(false);
       });
