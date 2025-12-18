@@ -3,6 +3,7 @@ pub mod codex;
 pub mod config;
 pub mod cursor;
 pub mod harvester;
+pub mod history_import;
 pub mod log_writer;
 pub mod notifier;
 pub mod parse;

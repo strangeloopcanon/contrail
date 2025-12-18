@@ -1,6 +1,7 @@
 use anyhow::Context;
 use scrapers::config::ContrailConfig;
 use scrapers::harvester::Harvester;
+use scrapers::history_import;
 use scrapers::log_writer::LogWriter;
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +25,8 @@ async fn main() -> anyhow::Result<()> {
         "Ensured Contrail log directory exists at {:?}",
         contrail_dir
     );
+
+    maybe_import_history(&config);
 
     let log_writer = LogWriter::new(config.log_path.clone());
 
@@ -79,4 +82,48 @@ async fn main() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn maybe_import_history(config: &ContrailConfig) {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let marker_path = home.join(".contrail/state/history_import_done.json");
+    if marker_path.exists() {
+        return;
+    }
+
+    println!("Backfilling historical Codex/Claude logs (one-time)...");
+    match history_import::import_history(config) {
+        Ok(stats) => {
+            println!(
+                "History import complete: imported={} skipped={} errors={}",
+                stats.imported, stats.skipped, stats.errors
+            );
+            if let Some(dir) = marker_path.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
+            let completed_at_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs());
+            let body = serde_json::json!({
+                "completed_at_unix": completed_at_unix,
+                "imported": stats.imported,
+                "skipped": stats.skipped,
+                "errors": stats.errors,
+                "log_path": config.log_path,
+                "codex_root": config.codex_root,
+                "claude_history": config.claude_history,
+            });
+            let _ = fs::write(
+                &marker_path,
+                serde_json::to_string_pretty(&body).unwrap_or_default(),
+            );
+        }
+        Err(e) => {
+            eprintln!("History import failed (continuing): {e:?}");
+        }
+    }
 }

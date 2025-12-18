@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Contrail Analysis ADE</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #111c33;
+        --card2: #0b1324;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --border: #24304a;
+        --accent: #38bdf8;
+        --good: #4ade80;
+        --warn: #fbbf24;
+        --bad: #f87171;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: var(--sans);
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.02em;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      @media (min-width: 1100px) {
+        .grid {
+          grid-template-columns: 1.2fr 0.8fr;
+        }
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: 10px;
+        padding: 14px;
+      }
+
+      .card h2 {
+        margin: 0 0 10px 0;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--border);
+        background: var(--card2);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 13px;
+      }
+
+      textarea {
+        min-height: 90px;
+        font-family: var(--mono);
+        line-height: 1.4;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      @media (min-width: 700px) {
+        .row.two {
+          grid-template-columns: 1fr 1fr;
+        }
+        .row.three {
+          grid-template-columns: 1fr 1fr 1fr;
+        }
+      }
+
+      button {
+        border: 1px solid var(--border);
+        background: #0b2440;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      button.secondary {
+        background: transparent;
+      }
+
+      button.danger {
+        background: #2a0f14;
+        border-color: #4b1a21;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      pre {
+        margin: 0;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card2);
+        overflow: auto;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        max-height: 420px;
+        white-space: pre-wrap;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .pill.good {
+        color: var(--good);
+      }
+      .pill.warn {
+        color: var(--warn);
+      }
+      .pill.bad {
+        color: var(--bad);
+      }
+
+      .block {
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 10px;
+      }
+
+      .block-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 10px;
+      }
+
+      .block-title {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .small {
+        font-size: 12px;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+
+      .session-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      @media (min-width: 1100px) {
+        .session-grid {
+          grid-template-columns: 0.9fr 1.1fr;
+        }
+      }
+
+      .session-list {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card2);
+        overflow: auto;
+        max-height: 420px;
+      }
+
+      .session-item {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+      }
+      .session-item:hover {
+        background: rgba(56, 189, 248, 0.07);
+      }
+      .session-item:last-child {
+        border-bottom: none;
+      }
+
+      .session-item-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+
+      .badge.codex-cli {
+        border-color: rgba(16, 185, 129, 0.35);
+        color: #10b981;
+      }
+      .badge.cursor {
+        border-color: rgba(59, 130, 246, 0.35);
+        color: #3b82f6;
+      }
+      .badge.claude-code {
+        border-color: rgba(245, 158, 11, 0.35);
+        color: #f59e0b;
+      }
+      .badge.antigravity {
+        border-color: rgba(139, 92, 246, 0.35);
+        color: #8b5cf6;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Contrail Analysis ADE</h1>
+        <div class="muted small">
+          Local-first analysis over <code>~/.contrail/logs/master_log.jsonl</code>
+        </div>
+      </div>
+      <div class="actions">
+        <span id="health" class="pill">checking…</span>
+        <button class="secondary" id="refreshAll">Refresh</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Context Pack</h2>
+        <div class="row three">
+          <div>
+            <label>Day (YYYY-MM-DD, optional)</label>
+            <input id="cpDay" placeholder="2025-12-18" />
+          </div>
+          <div>
+            <label>Top sessions</label>
+            <input id="cpSessions" type="number" min="1" max="20" value="5" />
+          </div>
+          <div>
+            <label>Recent memories</label>
+            <input id="cpMemories" type="number" min="0" max="50" value="5" />
+          </div>
+        </div>
+        <div class="row two">
+          <div class="actions">
+            <label style="width: 100%">Include</label>
+            <label class="pill">
+              <input id="cpIncludeBlocks" type="checkbox" checked />
+              blocks
+            </label>
+            <label class="pill">
+              <input id="cpIncludeMemories" type="checkbox" checked />
+              memories
+            </label>
+          </div>
+          <div class="actions" style="justify-content: flex-end">
+            <button id="cpGenerate">Generate</button>
+            <button class="secondary" id="cpCopy">Copy</button>
+          </div>
+        </div>
+
+        <div class="hint">
+          Tip: use this output as a “context bundle” to paste into Codex/Claude/Cursor before
+          starting a new session.
+        </div>
+        <div style="height: 10px"></div>
+        <pre id="cpOutput">Loading…</pre>
+      </div>
+
+      <div class="card">
+        <h2>Probe</h2>
+        <div class="row two">
+          <div>
+            <label>Query</label>
+            <input id="probeQ" placeholder="apply patch failed" />
+          </div>
+          <div>
+            <label>Day (optional)</label>
+            <input id="probeDay" placeholder="2025-12-18" />
+          </div>
+        </div>
+        <div class="row two">
+          <div>
+            <label>Limit</label>
+            <input id="probeLimit" type="number" min="1" max="100" value="12" />
+          </div>
+          <div class="actions" style="justify-content: flex-end">
+            <button id="probeRun">Run probe</button>
+          </div>
+        </div>
+	        <pre id="probeOut">—</pre>
+	      </div>
+	    </div>
+
+	    <div class="card" style="margin-top: 16px">
+	      <h2>Sessions</h2>
+	      <div class="row three">
+	        <div>
+	          <label>Tool</label>
+	          <select id="sessTool">
+	            <option value="all">All</option>
+	            <option value="codex-cli">codex-cli</option>
+	            <option value="cursor">cursor</option>
+	            <option value="claude-code">claude-code</option>
+	            <option value="antigravity">antigravity</option>
+	          </select>
+	        </div>
+	        <div>
+	          <label>Day (optional)</label>
+	          <input id="sessDay" placeholder="2025-12-18" />
+	        </div>
+	        <div>
+	          <label>Limit</label>
+	          <input id="sessLimit" type="number" min="1" max="5000" value="200" />
+	        </div>
+	      </div>
+	      <div class="row two">
+	        <div>
+	          <label>Sort</label>
+	          <select id="sessSort">
+	            <option value="recent">recent</option>
+	            <option value="score">score</option>
+	          </select>
+	        </div>
+	        <div class="actions" style="justify-content: flex-end">
+	          <button class="secondary" id="sessImport">Import history now</button>
+	          <label class="pill">
+	            <input id="sessRefresh" type="checkbox" />
+	            reload log
+	          </label>
+	          <button id="sessLoad">Load sessions</button>
+	        </div>
+	      </div>
+	      <div class="session-grid">
+	        <div class="session-list" id="sessionList"></div>
+	        <pre id="sessionOut">Select a session…</pre>
+	      </div>
+	      <div class="hint">
+	        If your historical Codex sessions aren’t showing up yet, run the updated
+	        <code>core_daemon</code> once (it auto-backfills Codex/Claude history into the master
+	        log).
+	      </div>
+	    </div>
+
+	    <div class="card" style="margin-top: 16px">
+	      <h2>Memory Blocks</h2>
+	      <div class="row three">
+        <div>
+          <label>Label</label>
+          <input id="newLabel" placeholder="project" />
+        </div>
+        <div>
+          <label>Project Context (optional)</label>
+          <input id="newProject" placeholder="/Users/me/repo" />
+        </div>
+        <div>
+          <label>Tags (comma-separated, optional)</label>
+          <input id="newTags" placeholder="style,preferences" />
+        </div>
+      </div>
+      <div class="row two">
+        <div>
+          <label>Value</label>
+          <textarea id="newValue" placeholder="Prefer Rust, run clippy, keep diffs small."></textarea>
+        </div>
+        <div>
+          <label>Source Tool (optional)</label>
+          <input id="newTool" placeholder="codex-cli" />
+          <div style="height: 10px"></div>
+          <div class="actions" style="justify-content: flex-end">
+            <button id="createBlock">Create</button>
+          </div>
+          <div class="hint">
+            Stored on disk at <code>~/.contrail/analysis/memory_blocks.json</code> by default.
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 12px"></div>
+      <div id="blocks"></div>
+    </div>
+
+    <script>
+      async function api(path, opts) {
+        const res = await fetch(path, opts);
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
+        }
+        return res;
+      }
+
+      function toTags(raw) {
+        const s = (raw || "").trim();
+        if (!s) return null;
+        const tags = s
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+        return tags.length ? tags : null;
+      }
+
+      async function refreshHealth() {
+        try {
+          await api("/health");
+          const el = document.getElementById("health");
+          el.textContent = "ok";
+          el.classList.add("good");
+        } catch (e) {
+          const el = document.getElementById("health");
+          el.textContent = "error";
+          el.classList.add("bad");
+        }
+      }
+
+      async function refreshContextPack(refreshFromDisk) {
+        const day = document.getElementById("cpDay").value.trim();
+        const sessionLimit = document.getElementById("cpSessions").value;
+        const memoryLimit = document.getElementById("cpMemories").value;
+        const includeBlocks = document.getElementById("cpIncludeBlocks").checked;
+        const includeMemories = document.getElementById("cpIncludeMemories").checked;
+        const refresh = !!refreshFromDisk;
+
+        const params = new URLSearchParams();
+        params.set("format", "text");
+        params.set("session_limit", sessionLimit);
+        params.set("memory_limit", memoryLimit);
+        params.set("include_memory_blocks", includeBlocks ? "true" : "false");
+        params.set("include_memories", includeMemories ? "true" : "false");
+        params.set("refresh", refresh ? "true" : "false");
+        if (day) params.set("day", day);
+
+        const out = document.getElementById("cpOutput");
+        out.textContent = "Loading…";
+        try {
+          const res = await api(`/api/context_pack?${params.toString()}`);
+          out.textContent = await res.text();
+        } catch (e) {
+          out.textContent = `error: ${e.message}`;
+        }
+      }
+
+      async function copyContextPack() {
+        const text = document.getElementById("cpOutput").textContent || "";
+        if (!text.trim()) return;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (e) {
+          alert("Copy failed (browser permissions).");
+        }
+      }
+
+      async function runProbe() {
+        const q = document.getElementById("probeQ").value.trim();
+        const day = document.getElementById("probeDay").value.trim();
+        const limit = document.getElementById("probeLimit").value;
+        const out = document.getElementById("probeOut");
+        if (!q) {
+          out.textContent = "error: query is required";
+          return;
+        }
+        const params = new URLSearchParams();
+        params.set("q", q);
+        params.set("limit", limit);
+        if (day) params.set("day", day);
+        out.textContent = "Loading…";
+        try {
+          const res = await api(`/api/probe?${params.toString()}`);
+          const json = await res.json();
+          out.textContent = JSON.stringify(json, null, 2);
+        } catch (e) {
+          out.textContent = `error: ${e.message}`;
+        }
+      }
+
+      function renderSessionItem(session) {
+        const item = document.createElement("div");
+        item.className = "session-item";
+
+        const title = document.createElement("div");
+        title.className = "session-item-title";
+
+        const left = document.createElement("div");
+        const badge = document.createElement("span");
+        badge.className = `badge ${session.source_tool}`;
+        badge.textContent = session.source_tool;
+        left.appendChild(badge);
+
+        const right = document.createElement("div");
+        right.className = "muted small";
+        right.textContent = session.ended_at ? new Date(session.ended_at).toLocaleString() : "";
+
+        title.appendChild(left);
+        title.appendChild(right);
+
+        const meta = document.createElement("div");
+        meta.className = "muted small";
+        const flags = [];
+        if (session.interrupted) flags.push("interrupted");
+        if (session.file_effects > 0) flags.push(`file_effects:${session.file_effects}`);
+        if (session.clipboard_hits > 0) flags.push(`clipboard:${session.clipboard_hits}`);
+        const flagText = flags.length ? ` • ${flags.join(" • ")}` : "";
+        meta.textContent = `${session.project_context} (${session.session_id}) • turns:${session.turn_count} • score:${Number(
+          session.score || 0,
+        ).toFixed(2)}${flagText}`;
+
+        item.appendChild(title);
+        item.appendChild(meta);
+
+        item.addEventListener("click", async () => {
+          await loadSession(session);
+        });
+
+        return item;
+      }
+
+      async function refreshSessions(refreshFromDisk) {
+        const tool = document.getElementById("sessTool").value;
+        const day = document.getElementById("sessDay").value.trim();
+        const sort = document.getElementById("sessSort").value;
+        const limit = document.getElementById("sessLimit").value;
+        const refresh = refreshFromDisk || document.getElementById("sessRefresh").checked;
+
+        const params = new URLSearchParams();
+        params.set("sort", sort);
+        params.set("limit", limit);
+        params.set("tool", tool);
+        params.set("refresh", refresh ? "true" : "false");
+        if (day) params.set("day", day);
+
+        const list = document.getElementById("sessionList");
+        list.innerHTML = "<div class='muted small' style='padding:10px'>Loading…</div>";
+        try {
+          const res = await api(`/api/sessions?${params.toString()}`);
+          const json = await res.json();
+          const sessions = json.sessions || [];
+          list.innerHTML = "";
+          if (!sessions.length) {
+            list.innerHTML =
+              "<div class='muted small' style='padding:10px'>No sessions found.</div>";
+            return;
+          }
+          sessions.forEach((s) => list.appendChild(renderSessionItem(s)));
+        } catch (e) {
+          list.innerHTML = `<div class='muted small' style='padding:10px'>error: ${e.message}</div>`;
+        }
+      }
+
+      async function loadSession(session) {
+        const out = document.getElementById("sessionOut");
+        out.textContent = "Loading…";
+        try {
+          const params = new URLSearchParams();
+          params.set("source_tool", session.source_tool);
+          params.set("session_id", session.session_id);
+          params.set("max_content_chars", "20000");
+          const res = await api(`/api/session_events?${params.toString()}`);
+          const events = await res.json();
+
+          const lines = [];
+          lines.push(`${session.source_tool} • ${session.project_context} • ${session.session_id}`);
+          lines.push(
+            `started: ${new Date(session.started_at).toLocaleString()} • ended: ${new Date(
+              session.ended_at,
+            ).toLocaleString()} • turns: ${session.turn_count}`,
+          );
+          lines.push("");
+
+          for (const e of events) {
+            const ts = e.timestamp ? new Date(e.timestamp).toISOString() : "";
+            const role = e?.interaction?.role || "role";
+            const content = e?.interaction?.content || "";
+            lines.push(`[${ts}] ${role}`);
+            lines.push(content);
+            lines.push("");
+          }
+          out.textContent = lines.join("\n");
+        } catch (e) {
+          out.textContent = `error: ${e.message}`;
+        }
+      }
+
+      async function importHistoryNow() {
+        const btn = document.getElementById("sessImport");
+        const out = document.getElementById("sessionOut");
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = "Importing…";
+        out.textContent = "Importing history…";
+        try {
+          const res = await api("/api/import_history", { method: "POST" });
+          const json = await res.json();
+          out.textContent = `Import complete: imported=${json.imported} skipped=${json.skipped} errors=${json.errors}\n\nReloading sessions…`;
+          await refreshSessions(true);
+          await refreshContextPack(true);
+        } catch (e) {
+          out.textContent = `Import failed: ${e.message}`;
+        } finally {
+          btn.textContent = prev;
+          btn.disabled = false;
+        }
+      }
+
+      function renderBlock(block) {
+        const div = document.createElement("div");
+        div.className = "block";
+
+        const head = document.createElement("div");
+        head.className = "block-head";
+        const title = document.createElement("div");
+        title.className = "block-title";
+        title.textContent = `${block.id} • updated ${block.updated_at}`;
+
+        const flags = document.createElement("div");
+        flags.className = "actions";
+        const hasRedactions =
+          block.security_flags &&
+          Array.isArray(block.security_flags.redacted_secrets) &&
+          block.security_flags.redacted_secrets.length > 0;
+        if (hasRedactions) {
+          const pill = document.createElement("span");
+          pill.className = "pill warn";
+          pill.textContent = `redacted: ${block.security_flags.redacted_secrets.join(", ")}`;
+          flags.appendChild(pill);
+        } else {
+          const pill = document.createElement("span");
+          pill.className = "pill";
+          pill.textContent = "no redactions";
+          flags.appendChild(pill);
+        }
+
+        head.appendChild(title);
+        head.appendChild(flags);
+        div.appendChild(head);
+
+        const row1 = document.createElement("div");
+        row1.className = "row three";
+
+        const labelWrap = document.createElement("div");
+        const labelLab = document.createElement("label");
+        labelLab.textContent = "Label";
+        const label = document.createElement("input");
+        label.value = block.label || "";
+        labelWrap.appendChild(labelLab);
+        labelWrap.appendChild(label);
+
+        const projWrap = document.createElement("div");
+        const projLab = document.createElement("label");
+        projLab.textContent = "Project Context (optional)";
+        const project = document.createElement("input");
+        project.value = block.project_context || "";
+        projWrap.appendChild(projLab);
+        projWrap.appendChild(project);
+
+        const tagsWrap = document.createElement("div");
+        const tagsLab = document.createElement("label");
+        tagsLab.textContent = "Tags (comma-separated)";
+        const tags = document.createElement("input");
+        tags.value = Array.isArray(block.tags) ? block.tags.join(", ") : "";
+        tagsWrap.appendChild(tagsLab);
+        tagsWrap.appendChild(tags);
+
+        row1.appendChild(labelWrap);
+        row1.appendChild(projWrap);
+        row1.appendChild(tagsWrap);
+        div.appendChild(row1);
+
+        const row2 = document.createElement("div");
+        row2.className = "row two";
+
+        const valueWrap = document.createElement("div");
+        const valueLab = document.createElement("label");
+        valueLab.textContent = "Value";
+        const value = document.createElement("textarea");
+        value.value = block.value || "";
+        valueWrap.appendChild(valueLab);
+        valueWrap.appendChild(value);
+
+        const toolWrap = document.createElement("div");
+        const toolLab = document.createElement("label");
+        toolLab.textContent = "Source Tool (optional)";
+        const tool = document.createElement("input");
+        tool.value = block.source_tool || "";
+        toolWrap.appendChild(toolLab);
+        toolWrap.appendChild(tool);
+
+        const act = document.createElement("div");
+        act.className = "actions";
+        act.style.justifyContent = "flex-end";
+        act.style.marginTop = "10px";
+        const save = document.createElement("button");
+        save.textContent = "Save";
+        const del = document.createElement("button");
+        del.textContent = "Delete";
+        del.className = "danger";
+        act.appendChild(save);
+        act.appendChild(del);
+        toolWrap.appendChild(act);
+
+        row2.appendChild(valueWrap);
+        row2.appendChild(toolWrap);
+        div.appendChild(row2);
+
+        save.addEventListener("click", async () => {
+          save.disabled = true;
+          try {
+            const body = {
+              label: label.value,
+              value: value.value,
+              project_context: project.value.trim() ? project.value.trim() : null,
+              source_tool: tool.value.trim() ? tool.value.trim() : null,
+              tags: toTags(tags.value),
+            };
+            const res = await api(`/api/memory_blocks/${block.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const updated = await res.json();
+            await refreshBlocks();
+            block = updated;
+          } catch (e) {
+            alert(`Save failed: ${e.message}`);
+          } finally {
+            save.disabled = false;
+          }
+        });
+
+        del.addEventListener("click", async () => {
+          if (!confirm("Delete this memory block?")) return;
+          del.disabled = true;
+          try {
+            await api(`/api/memory_blocks/${block.id}`, { method: "DELETE" });
+            await refreshBlocks();
+          } catch (e) {
+            alert(`Delete failed: ${e.message}`);
+          } finally {
+            del.disabled = false;
+          }
+        });
+
+        return div;
+      }
+
+      async function refreshBlocks() {
+        const container = document.getElementById("blocks");
+        container.innerHTML = "<div class='muted small'>Loading…</div>";
+        try {
+          const res = await api("/api/memory_blocks");
+          const blocks = await res.json();
+          container.innerHTML = "";
+          if (!blocks.length) {
+            container.innerHTML =
+              "<div class='muted small'>No memory blocks yet. Create one above.</div>";
+            return;
+          }
+          blocks.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+          blocks.forEach((b) => container.appendChild(renderBlock(b)));
+        } catch (e) {
+          container.innerHTML = `<div class='muted small'>error: ${e.message}</div>`;
+        }
+      }
+
+      async function createBlock() {
+        const label = document.getElementById("newLabel").value.trim();
+        const value = document.getElementById("newValue").value;
+        const project = document.getElementById("newProject").value.trim();
+        const tool = document.getElementById("newTool").value.trim();
+        const tags = document.getElementById("newTags").value;
+        if (!label) {
+          alert("Label is required.");
+          return;
+        }
+        if (!value.trim()) {
+          alert("Value is required.");
+          return;
+        }
+        const btn = document.getElementById("createBlock");
+        btn.disabled = true;
+        try {
+          await api("/api/memory_blocks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              label,
+              value,
+              project_context: project || null,
+              source_tool: tool || null,
+              tags: toTags(tags),
+            }),
+          });
+          document.getElementById("newValue").value = "";
+          await refreshBlocks();
+          await refreshContextPack(false);
+        } catch (e) {
+          alert(`Create failed: ${e.message}`);
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.getElementById("refreshAll").addEventListener("click", async () => {
+        await refreshHealth();
+        await refreshBlocks();
+        await refreshContextPack(true);
+        await refreshSessions(true);
+      });
+      document.getElementById("cpGenerate").addEventListener("click", async () => {
+        await refreshContextPack(false);
+      });
+      document.getElementById("cpCopy").addEventListener("click", copyContextPack);
+      document.getElementById("probeRun").addEventListener("click", runProbe);
+      document.getElementById("sessLoad").addEventListener("click", async () => {
+        await refreshSessions(false);
+      });
+      document.getElementById("sessImport").addEventListener("click", importHistoryNow);
+      document.getElementById("createBlock").addEventListener("click", createBlock);
+
+      (async function init() {
+        await refreshHealth();
+        await refreshBlocks();
+        await refreshContextPack(false);
+        await refreshSessions(false);
+      })();
+    </script>
+  </body>
+</html>
