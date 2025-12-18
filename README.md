@@ -63,31 +63,27 @@ If you already have a pile of projects and past AI sessions:
 cargo build --release
 ```
 
-2) Backfill historical Codex/Claude logs:
-```bash
-cargo run -p importer
-```
-This runs DLP + schema validation and appends to `~/.contrail/logs/master_log.jsonl`.
-
-3) Start live capture:
+2) Start live capture (also backfills history on first run):
 ```bash
 cargo run -p core_daemon
 ```
+On the first run, `core_daemon` will backfill historical Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (DLP + schema validation + dedupe), then switch to live capture.  
+To re-run the one-time backfill, delete `~/.contrail/state/history_import_done.json` and restart the daemon.
 
-4) View the dashboard:
+3) View the dashboard (live tail):
 ```bash
 cargo run -p dashboard
 # open http://127.0.0.1:3000  (use ?all=true to fetch the full log file)
 ```
 
-To restart later, just run steps 2–4 as needed (skip rebuild unless deps change).
+To restart later, just run steps 2–3 as needed (skip rebuild unless deps change).
 
 ### Quickstart (capture → view → analyze)
 
 1. **Live capture:** `cargo run -p core_daemon` (writes to `~/.contrail/logs/master_log.jsonl`).  
 2. **View dashboard:** `cargo run -p dashboard` then open `http://127.0.0.1:3000`.  
-3. **Analyze (read-only):** `cargo run -p analysis` (optional GPT features need `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`).  
-4. **Historical backfill (optional, one-time):** `cargo run -p importer` to pull past Codex/Claude history into the master log.
+3. **Analyze (local ADE):** `cargo run -p analysis` then open `http://127.0.0.1:3210/` (optional GPT features need `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`).  
+4. **Historical backfill (optional/manual):** `cargo run -p importer` to pull past Codex/Claude history into the master log (the daemon also does a one-time backfill on first run).
 
 ### Export a curated dataset (seed for fine-tuning)
 
@@ -125,9 +121,9 @@ Use the exported file as your starting point for fine-tuning or further filterin
 }
 ```
 
-### Analysis service (memories/probing)
+### Analysis service (ADE + memories/probing)
 
-An optional analysis surface lives in the `analysis` crate. It reads the existing `~/.contrail/logs/master_log.jsonl` (read-only), scores sessions/turns for salience, and exposes a small API for building “memories” and probe prompts (no embeddings).
+An optional analysis surface lives in the `analysis` crate. It reads the existing `~/.contrail/logs/master_log.jsonl`, serves a local “ADE” UI, scores sessions/turns for salience, and exposes a small API for building “memories” and probe prompts (no embeddings). It stores analysis artifacts separately under `~/.contrail/analysis/`.
 
 Run it locally:
 ```bash
@@ -136,17 +132,22 @@ cargo run -p analysis
 ```
 
 Endpoints:
-- `/api/sessions?day=YYYY-MM-DD` — session summaries with salience scores.
+- `/` — local ADE UI (sessions browser, probe, context pack, memory blocks).
+- `/api/sessions?day=YYYY-MM-DD&sort=recent&tool=codex-cli&limit=200` — session summaries (supports `sort`, `tool`, `limit`, `offset`).
+- `/api/session_events?source_tool=codex-cli&session_id=...` — full event list for a single session (for browsing conversations).
 - `/api/salient?limit=5&day=YYYY-MM-DD` — top sessions with salient turns.
 - `/api/probe?q=question&limit=12&day=YYYY-MM-DD` — lexical probe over turns; returns matching snippets plus a suggested LLM prompt for GPT-5.1 Responses API.
+- `/api/context_pack?format=text&session_limit=5&memory_limit=5` — redacted, size-bounded “paste into your next session” context bundle.
+- `/api/memory_blocks` — GET/POST editable memory blocks stored at `~/.contrail/analysis/memory_blocks.json` (env override: `CONTRAIL_MEMORY_BLOCKS_PATH`).
 - `/api/memories` — GET to list stored memory records; POST `{ "q": "...", "limit": N, "llm_response": {...} }` to persist a probe + (optional) LLM output.
 - `/api/memories/autoprobe` — POST `{ "q": "...", "limit": N, "model": "gpt-5.1", "temperature": 0 }`; requires `OPENAI_API_KEY`, calls GPT with the suggested prompt, and stores the response.
 - `/api/memories/autoprobe/defaults` — POST to run a default (or custom) set of probes in one shot and store GPT-backed memories. Body: `{ "queries": ["error","interrupted",...], "limit": N, "model": "gpt-5.1", "temperature": 0 }`. If `queries` is omitted, uses the built-in defaults (errors, interruptions, patch failures, rate limits, tool-call failures). This is opt-in; trigger it when you want a turnkey daily/adhoc sweep.
 
 ### End-to-end flow (arms-length analytics)
-- **Capture live:** `cargo run -p core_daemon` to tail active sessions (writes `~/.contrail/logs/master_log.jsonl`), optionally view with `cargo run -p dashboard` at `http://127.0.0.1:3000`.
-- **Capture historical (one-time/backfill):** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
-- **Analyze on demand:** `cargo run -p analysis` (read-only) to list sessions, fetch salient turns, run probes, and create GPT-backed memories via `/api/memories/autoprobe` (requires `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`). Analytics output is stored separately at `~/.contrail/analysis/memories.jsonl`; the master log remains unchanged. Use `/api/memories/autoprobe/defaults` for a one-click sweep of common pain points.
+- **Capture live:** `cargo run -p core_daemon` to tail active sessions (writes `~/.contrail/logs/master_log.jsonl`; does a one-time historical backfill on first run).
+- **Analyze/browse:** `cargo run -p analysis` then open `http://127.0.0.1:3210/` for sessions, probes, context packs, and memories.
+- **(Optional) Live UI:** `cargo run -p dashboard` at `http://127.0.0.1:3000`.
+- **(Optional/manual) Historical backfill:** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
 
 ## 🔧 Supported Tools Configuration
 
