@@ -1,8 +1,10 @@
-use axum::{Json, Router, extract::State, response::Html, routing::get};
+use axum::{Json, Router, extract::Query, extract::State, response::Html, routing::get};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::env;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::{
@@ -40,39 +42,136 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("index.html"))
 }
 
-async fn get_logs(State(state): State<Arc<AppState>>) -> Json<Vec<Value>> {
-    let query: LogsQuery = axum::extract::Query::<LogsQuery>::default().0;
-    if query.all.unwrap_or(false)
-        && let Ok(content) = fs::read_to_string(&state.log_path).await
+async fn get_logs(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<LogsQuery>,
+) -> Json<Vec<Value>> {
+    let limit = query.limit.unwrap_or(200).clamp(1, 5000);
+    let tool_filter = query.tool.clone();
+    let session_filter = query.session_id.clone();
+
+    if query.all.unwrap_or(false) {
+        return Json(load_all_logs(&state.log_path, tool_filter, session_filter).await);
+    }
+
+    let log_path = state.log_path.clone();
+    let logs = tokio::task::spawn_blocking(move || {
+        load_tail_logs(&log_path, limit, tool_filter, session_filter)
+    })
+    .await
+    .unwrap_or_default();
+    Json(logs)
+}
+
+async fn load_all_logs(
+    path: &PathBuf,
+    tool_filter: Option<String>,
+    session_filter: Option<String>,
+) -> Vec<Value> {
+    let Ok(file) = fs::File::open(path).await else {
+        return Vec::new();
+    };
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut logs = Vec::new();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(json) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if !matches_filters(&json, tool_filter.as_deref(), session_filter.as_deref()) {
+            continue;
+        }
+        logs.push(json);
+    }
+
+    logs
+}
+
+fn load_tail_logs(
+    path: &PathBuf,
+    limit: usize,
+    tool_filter: Option<String>,
+    session_filter: Option<String>,
+) -> Vec<Value> {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    let file_size = meta.len();
+    if file_size == 0 {
+        return Vec::new();
+    }
+
+    let mut collected: VecDeque<Value> = VecDeque::with_capacity(limit.min(5000));
+    let mut chunk_size = 256 * 1024usize;
+    let max_chunk_size = 16 * 1024 * 1024usize;
+
+    while chunk_size <= max_chunk_size {
+        let start = file_size.saturating_sub(chunk_size as u64);
+        let Ok(mut file) = File::open(path) else {
+            return Vec::new();
+        };
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return Vec::new();
+        }
+
+        let mut buf = Vec::new();
+        if file.read_to_end(&mut buf).is_err() {
+            return Vec::new();
+        }
+
+        let text = String::from_utf8_lossy(&buf);
+        for line in text.lines().rev() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(json) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if !matches_filters(&json, tool_filter.as_deref(), session_filter.as_deref()) {
+                continue;
+            }
+            collected.push_front(json);
+            if collected.len() >= limit {
+                return collected.into_iter().collect();
+            }
+        }
+
+        if start == 0 {
+            break;
+        }
+        chunk_size *= 2;
+    }
+
+    collected.into_iter().collect()
+}
+
+fn matches_filters(json: &Value, tool: Option<&str>, session_id: Option<&str>) -> bool {
+    if let Some(tool_filter) = tool
+        && json
+            .get("source_tool")
+            .and_then(Value::as_str)
+            .is_some_and(|t| t != tool_filter)
     {
-        let mut logs = Vec::new();
-        for line in content.lines() {
-            if let Ok(json) = serde_json::from_str::<Value>(line) {
-                logs.push(json);
-            }
-        }
-        return Json(logs);
+        return false;
     }
 
-    let mut tail: VecDeque<Value> = VecDeque::with_capacity(200);
-
-    if let Ok(file) = fs::File::open(&state.log_path).await {
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Ok(json) = serde_json::from_str::<Value>(&line) {
-                if tail.len() == 200 {
-                    tail.pop_front();
-                }
-                tail.push_back(json);
-            }
-        }
+    if let Some(session_filter) = session_id
+        && json
+            .get("session_id")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s != session_filter)
+    {
+        return false;
     }
 
-    Json(tail.into_iter().collect())
+    true
 }
 
 #[derive(Default, Deserialize)]
 struct LogsQuery {
     all: Option<bool>,
+    limit: Option<usize>,
+    tool: Option<String>,
+    session_id: Option<String>,
 }
