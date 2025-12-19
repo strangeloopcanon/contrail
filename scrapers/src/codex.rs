@@ -64,6 +64,8 @@ pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
         .unwrap_or("assistant")
         .to_string();
 
+    let role = derive_role_override(&json).unwrap_or(role);
+
     let content_value = json
         .pointer("/interaction/content")
         .or_else(|| json.pointer("/payload/message/content"))
@@ -86,6 +88,20 @@ pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
         project_context,
         metadata,
     })
+}
+
+fn derive_role_override(json: &Value) -> Option<String> {
+    let record_type = json.get("type").and_then(Value::as_str)?;
+    if record_type.eq_ignore_ascii_case("event_msg") {
+        let payload_type = json.pointer("/payload/type").and_then(Value::as_str)?;
+        if payload_type.eq_ignore_ascii_case("user_message") {
+            return Some("user".to_string());
+        }
+        if payload_type.eq_ignore_ascii_case("agent_message") {
+            return Some("assistant".to_string());
+        }
+    }
+    None
 }
 
 fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
@@ -167,5 +183,21 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(10)
         );
+    }
+
+    #[test]
+    fn parses_event_msg_user_message_as_user() {
+        let raw = r#"{
+            "timestamp": "2025-12-01T10:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "hello from user"
+            }
+        }"#;
+
+        let parsed = parse_codex_line(raw).expect("should parse");
+        assert_eq!(parsed.role, "user");
+        assert!(parsed.content.contains("\"user_message\""));
     }
 }
