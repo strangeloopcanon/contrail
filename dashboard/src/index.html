@@ -374,39 +374,44 @@
         let currentMode = 'tail';
         let currentView = 'conversation';
         let currentLimit = 200;
-        let allSessions = [];
-        let sessions = [];
-        let selectedKey = null;
-        let pollTimer = null;
+	        let allSessions = [];
+	        let sessions = [];
+	        let selectedKey = null;
+	        let pollTimer = null;
+	        const sessionDetailCache = new Map();
 
-        document.getElementById('toolFilter').addEventListener('change', (e) => {
-            currentFilter = e.target.value;
-            currentProject = 'all';
-            document.getElementById('projectFilter').value = 'all';
-            selectedKey = null;
-            fetchAndRender();
-        });
+	        document.getElementById('toolFilter').addEventListener('change', (e) => {
+	            currentFilter = e.target.value;
+	            currentProject = 'all';
+	            document.getElementById('projectFilter').value = 'all';
+	            selectedKey = null;
+	            sessionDetailCache.clear();
+	            fetchAndRender();
+	        });
 
-        document.getElementById('projectFilter').addEventListener('change', (e) => {
-            currentProject = e.target.value;
-            selectedKey = null;
-            applyProjectFilter();
-            renderSessionsList();
-            renderConversation();
-        });
+	        document.getElementById('projectFilter').addEventListener('change', (e) => {
+	            currentProject = e.target.value;
+	            selectedKey = null;
+	            sessionDetailCache.clear();
+	            applyProjectFilter();
+	            renderSessionsList();
+	            renderConversation();
+	        });
 
-        document.getElementById('modeSelect').addEventListener('change', (e) => {
-            currentMode = e.target.value;
-            selectedKey = null;
-            updateModePill();
-            resetPolling();
-            fetchAndRender();
-        });
+	        document.getElementById('modeSelect').addEventListener('change', (e) => {
+	            currentMode = e.target.value;
+	            selectedKey = null;
+	            sessionDetailCache.clear();
+	            updateModePill();
+	            resetPolling();
+	            fetchAndRender();
+	        });
 
-        document.getElementById('limitSelect').addEventListener('change', (e) => {
-            currentLimit = Number(e.target.value || 200);
-            fetchAndRender();
-        });
+	        document.getElementById('limitSelect').addEventListener('change', (e) => {
+	            currentLimit = Number(e.target.value || 200);
+	            sessionDetailCache.clear();
+	            fetchAndRender();
+	        });
 
         document.getElementById('viewSelect').addEventListener('change', (e) => {
             currentView = e.target.value;
@@ -452,23 +457,89 @@
             return qs ? `/api/logs?${qs}` : '/api/logs';
         }
 
-        async function fetchAndRender() {
-            try {
-                const response = await fetch(buildApiUrl());
-                const logs = await response.json();
-                allSessions = groupSessions(logs);
-                updateProjectFilter();
-                applyProjectFilter();
-                renderSessionsList();
-                renderConversation();
-            } catch (e) {
-                console.error("Failed to fetch logs", e);
-            }
-        }
+	        async function fetchAndRender() {
+	            try {
+	                const response = await fetch(buildApiUrl());
+	                const logs = await response.json();
+	                allSessions = groupSessions(logs);
+	                updateProjectFilter();
+	                applyProjectFilter();
+	                await maybeRefreshSelectedSession();
+	                renderSessionsList();
+	                renderConversation();
+	            } catch (e) {
+	                console.error("Failed to fetch logs", e);
+	            }
+	        }
 
-        function updateProjectFilter() {
-            const select = document.getElementById('projectFilter');
-            const prev = currentProject || 'all';
+	        function desiredSessionDetailLimit() {
+	            return Math.min(5000, Math.max(2000, currentLimit * 10));
+	        }
+
+	        async function ensureSessionDetailsLoaded(key, opts = {}) {
+	            if (!key) return;
+	            if (currentMode !== 'tail') return;
+	            const force = Boolean(opts.force);
+
+	            const base =
+	                sessions.find((s) => s.key === key) || allSessions.find((s) => s.key === key);
+	            if (!base) return;
+
+	            const limit = desiredSessionDetailLimit();
+	            const cached = sessionDetailCache.get(key);
+	            if (!force && cached && cached.limit >= limit) return;
+
+	            const params = new URLSearchParams();
+	            params.set('limit', String(limit));
+	            params.set('tool', base.tool);
+	            params.set('session_id', base.sessionId);
+
+	            try {
+	                const res = await fetch(`/api/logs?${params.toString()}`);
+	                const logs = await res.json();
+	                const grouped = groupSessions(logs);
+	                const full = grouped.find((s) => s.key === key) || grouped[0];
+	                if (!full) return;
+	                sessionDetailCache.set(key, {
+	                    limit,
+	                    fetchedAt: Date.now(),
+	                    endedAt: full.endedAt,
+	                    session: full,
+	                });
+	            } catch (e) {
+	                console.error("Failed to load session details", e);
+	            }
+	        }
+
+	        async function maybeRefreshSelectedSession() {
+	            if (!selectedKey) return;
+	            if (currentMode !== 'tail') return;
+	            const global = sessions.find((s) => s.key === selectedKey);
+	            if (!global) return;
+	            const cached = sessionDetailCache.get(selectedKey);
+	            if (cached && cached.endedAt === global.endedAt) return;
+	            await ensureSessionDetailsLoaded(selectedKey, { force: true });
+	        }
+
+	        async function selectSessionKey(key) {
+	            selectedKey = key;
+	            renderSessionsList();
+	            renderConversation();
+
+	            if (currentMode !== 'tail') return;
+
+	            const convo = document.getElementById('conversation');
+	            convo.innerHTML =
+	                '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Loading full session…</div>';
+
+	            await ensureSessionDetailsLoaded(key, { force: true });
+	            renderSessionsList();
+	            renderConversation();
+	        }
+
+	        function updateProjectFilter() {
+	            const select = document.getElementById('projectFilter');
+	            const prev = currentProject || 'all';
 
             const map = new Map();
             allSessions.forEach((s) => {
@@ -633,11 +704,9 @@
                 const row = document.createElement('div');
                 row.className = `session-row${s.key === selectedKey ? ' active' : ''}`;
                 row.title = s.projectKey || s.project || '';
-                row.addEventListener('click', () => {
-                    selectedKey = s.key;
-                    renderSessionsList();
-                    renderConversation();
-                });
+	                row.addEventListener('click', () => {
+	                    selectSessionKey(s.key);
+	                });
 
                 const metaParts = [];
                 metaParts.push(`${s.interactions.length} turns`);
@@ -661,15 +730,17 @@
             });
         }
 
-        function renderConversation() {
-            const convo = document.getElementById('conversation');
-            const title = document.getElementById('conversationTitle');
-            const subtitle = document.getElementById('conversationSubtitle');
-            const session = sessions.find(s => s.key === selectedKey);
-            if (!session) {
-                title.textContent = 'Conversation';
-                subtitle.textContent = 'Select a session';
-                subtitle.removeAttribute('title');
+	        function renderConversation() {
+	            const convo = document.getElementById('conversation');
+	            const title = document.getElementById('conversationTitle');
+	            const subtitle = document.getElementById('conversationSubtitle');
+	            const cached = selectedKey ? sessionDetailCache.get(selectedKey) : null;
+	            const session =
+	                (cached && cached.session) || sessions.find(s => s.key === selectedKey);
+	            if (!session) {
+	                title.textContent = 'Conversation';
+	                subtitle.textContent = 'Select a session';
+	                subtitle.removeAttribute('title');
                 convo.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a session to view interactions.</div>';
                 return;
             }
@@ -681,12 +752,12 @@
             } else {
                 subtitle.textContent = `${session.projectLabel || session.project || 'Unknown'} • ${formatTimestamp(session.startedAt)} → ${formatTimestamp(session.endedAt)}`;
             }
-            subtitle.title = session.projectKey || session.project || '';
+	            subtitle.title = session.projectKey || session.project || '';
 
-            const displayed =
-                currentView === 'conversation'
-                    ? session.interactions.filter((i) => !isToolTrace(i.content))
-                    : session.interactions;
+	            const displayed =
+	                currentView === 'conversation'
+	                    ? session.interactions.filter((i) => isConversationEvent(session, i))
+	                    : session.interactions;
 
             let html = '';
             displayed.forEach((i, idx) => {
@@ -787,20 +858,40 @@
             return true;
         }
 
-        function isToolTrace(content) {
-            const parsed = tryParseJson(content);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-            const type = String(parsed.type || '').toLowerCase();
-            if (type === 'function_call' || type === 'function_call_output' || type === 'local_shell_call') {
-                return true;
-            }
-            if (parsed.record_type === 'state') return true;
-            return false;
-        }
+	        function isToolTrace(content) {
+	            const parsed = tryParseJson(content);
+	            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+	            const type = String(parsed.type || '').toLowerCase();
+	            if (type === 'function_call' || type === 'function_call_output' || type === 'local_shell_call') {
+	                return true;
+	            }
+	            if (parsed.record_type === 'state') return true;
+	            return false;
+	        }
 
-        function eventTimestamp(session, interaction) {
-            const ts = interaction?.timestamp || '';
-            if (!ts) return '';
+	        function isConversationEvent(session, interaction) {
+	            const role = String(interaction?.role || '').toLowerCase();
+	            if (role !== 'user' && role !== 'assistant') return false;
+
+	            const parsed = tryParseJson(interaction?.content || '');
+	            if (!parsed) return true;
+
+	            const ty = String(parsed.type || '').toLowerCase();
+	            if (ty === 'message') return true;
+	            if (
+	                ty === 'response_item' &&
+	                parsed.payload &&
+	                String(parsed.payload.type || '').toLowerCase() === 'message'
+	            ) {
+	                return true;
+	            }
+
+	            return false;
+	        }
+
+	        function eventTimestamp(session, interaction) {
+	            const ts = interaction?.timestamp || '';
+	            if (!ts) return '';
             if (session.tool !== 'codex-cli' || !session.imported) {
                 return formatTimestamp(ts);
             }
