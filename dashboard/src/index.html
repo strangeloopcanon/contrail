@@ -371,10 +371,14 @@
     <script>
         let currentFilter = 'all';
         let currentProject = 'all';
-        let currentMode = 'tail';
-        let currentView = 'conversation';
-        let currentLimit = 200;
+	        let currentMode = 'tail';
+	        let currentView = 'conversation';
+	        let currentLimit = 200;
 	        let allSessions = [];
+	        let discoverySessions = [];
+	        let lastDiscoveryAt = 0;
+	        const DISCOVERY_LIMIT = 5000;
+	        const DISCOVERY_REFRESH_MS = 30_000;
 	        let sessions = [];
 	        let selectedKey = null;
 	        let pollTimer = null;
@@ -386,6 +390,8 @@
 	            document.getElementById('projectFilter').value = 'all';
 	            selectedKey = null;
 	            sessionDetailCache.clear();
+	            discoverySessions = [];
+	            lastDiscoveryAt = 0;
 	            fetchAndRender();
 	        });
 
@@ -402,6 +408,8 @@
 	            currentMode = e.target.value;
 	            selectedKey = null;
 	            sessionDetailCache.clear();
+	            discoverySessions = [];
+	            lastDiscoveryAt = 0;
 	            updateModePill();
 	            resetPolling();
 	            fetchAndRender();
@@ -418,9 +426,9 @@
             renderConversation();
         });
 
-        document.getElementById('refreshBtn').addEventListener('click', () => {
-            fetchAndRender();
-        });
+	        document.getElementById('refreshBtn').addEventListener('click', () => {
+	            fetchAndRender(true);
+	        });
 
         function updateModePill() {
             const pill = document.getElementById('modePill');
@@ -457,11 +465,44 @@
             return qs ? `/api/logs?${qs}` : '/api/logs';
         }
 
-	        async function fetchAndRender() {
+	        function buildTailUrl(limitOverride) {
+	            const params = new URLSearchParams();
+	            params.set('limit', String(limitOverride || currentLimit));
+	            if (currentFilter !== 'all') {
+	                params.set('tool', currentFilter);
+	            }
+	            return `/api/logs?${params.toString()}`;
+	        }
+
+	        async function fetchAndRender(forceDiscovery = false) {
 	            try {
 	                const response = await fetch(buildApiUrl());
 	                const logs = await response.json();
-	                allSessions = groupSessions(logs);
+	                const tailSessions = groupSessions(logs);
+
+	                if (currentMode === 'tail') {
+	                    const now = Date.now();
+	                    const shouldDiscover =
+	                        forceDiscovery ||
+	                        !discoverySessions.length ||
+	                        now - lastDiscoveryAt > DISCOVERY_REFRESH_MS;
+	                    if (shouldDiscover) {
+	                        try {
+	                            const discRes = await fetch(buildTailUrl(DISCOVERY_LIMIT));
+	                            const discLogs = await discRes.json();
+	                            discoverySessions = groupSessions(discLogs);
+	                            lastDiscoveryAt = now;
+	                        } catch (e) {
+	                            console.warn('Discovery fetch failed', e);
+	                        }
+	                    }
+
+	                    allSessions = mergeSessions(discoverySessions, tailSessions);
+	                } else {
+	                    discoverySessions = [];
+	                    lastDiscoveryAt = 0;
+	                    allSessions = tailSessions;
+	                }
 	                updateProjectFilter();
 	                applyProjectFilter();
 	                await maybeRefreshSelectedSession();
@@ -470,6 +511,48 @@
 	            } catch (e) {
 	                console.error("Failed to fetch logs", e);
 	            }
+	        }
+
+	        function mergeSessions(baseSessions, deltaSessions) {
+	            const byKey = new Map();
+	            for (const s of baseSessions || []) {
+	                byKey.set(s.key, s);
+	            }
+	            for (const s of deltaSessions || []) {
+	                const existing = byKey.get(s.key);
+	                if (!existing) {
+	                    byKey.set(s.key, s);
+	                    continue;
+	                }
+
+	                if ((s.sortKey || 0) > (existing.sortKey || 0)) {
+	                    existing.sortKey = s.sortKey;
+	                    existing.endedAt = s.endedAt;
+	                    existing.ingestedEndedAt = s.ingestedEndedAt;
+	                }
+	                if (!existing.startedAt && s.startedAt) existing.startedAt = s.startedAt;
+	                if (!existing.ingestedStartedAt && s.ingestedStartedAt) {
+	                    existing.ingestedStartedAt = s.ingestedStartedAt;
+	                }
+
+	                existing.imported = Boolean(existing.imported || s.imported);
+	                if (!existing.originalStart && s.originalStart) {
+	                    existing.originalStart = s.originalStart;
+	                }
+
+	                if (
+	                    isGenericProjectContext(existing.project) &&
+	                    !isGenericProjectContext(s.project)
+	                ) {
+	                    existing.project = s.project;
+	                    existing.projectKey = existing.project || 'Unknown';
+	                    existing.projectLabel = projectLabelFromContext(existing.projectKey);
+	                }
+	            }
+
+	            const merged = Array.from(byKey.values());
+	            merged.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0));
+	            return merged;
 	        }
 
 	        function desiredSessionDetailLimit() {
@@ -602,9 +685,17 @@
                         interactions: []
                     });
                 }
-                byKey.get(key).interactions.push({
-                    role: log.interaction?.role || 'unknown',
-                    content: log.interaction?.content || '',
+                const session = byKey.get(key);
+                const logProject = log.project_context || 'Unknown';
+                if (isGenericProjectContext(session.project) && !isGenericProjectContext(logProject)) {
+                    session.project = logProject;
+                }
+
+                const content = log.interaction?.content || '';
+                const derivedRole = deriveInteractionRole(log.interaction?.role || 'unknown', content);
+                session.interactions.push({
+                    role: derivedRole,
+                    content,
                     timestamp: log.timestamp || '',
                     metadata: log.metadata || {},
                     seq
@@ -631,7 +722,7 @@
                     s.originalStart = null;
                 }
 
-                if (s.tool === 'codex-cli' && s.imported && isGenericProjectContext(s.project)) {
+                if (s.tool === 'codex-cli' && isGenericProjectContext(s.project)) {
                     const inferred = inferCodexProjectContext(s.interactions);
                     if (inferred) {
                         s.project = inferred;
@@ -653,6 +744,21 @@
 
             sessions.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0));
             return sessions;
+        }
+
+        function deriveInteractionRole(defaultRole, content) {
+            const parsed = tryParseJson(content);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return defaultRole;
+            }
+
+            const ty = String(parsed.type || '').toLowerCase();
+            if (ty !== 'event_msg') return defaultRole;
+
+            const payloadType = String(parsed.payload?.type || '').toLowerCase();
+            if (payloadType === 'user_message') return 'user';
+            if (payloadType === 'agent_message') return 'assistant';
+            return defaultRole;
         }
 
         function renderSessionsList() {
@@ -709,7 +815,9 @@
 	                });
 
                 const metaParts = [];
-                metaParts.push(`${s.interactions.length} turns`);
+                const msgCount = s.interactions.filter((i) => isConversationEvent(s, i)).length;
+                metaParts.push(`${s.interactions.length} events`);
+                if (msgCount) metaParts.push(`${msgCount} msgs`);
                 if (s.imported) metaParts.push('imported');
                 if (s.tool === 'codex-cli' && s.imported && s.originalStart) {
                     metaParts.push(`orig ${formatDateTime(s.originalStart)}`);
@@ -878,6 +986,10 @@
 
 	            const ty = String(parsed.type || '').toLowerCase();
 	            if (ty === 'message') return true;
+	            if (ty === 'event_msg') {
+	                const payloadType = String(parsed.payload?.type || '').toLowerCase();
+	                return payloadType === 'agent_message' || payloadType === 'user_message';
+	            }
 	            if (
 	                ty === 'response_item' &&
 	                parsed.payload &&
@@ -892,13 +1004,7 @@
 	        function eventTimestamp(session, interaction) {
 	            const ts = interaction?.timestamp || '';
 	            if (!ts) return '';
-            if (session.tool !== 'codex-cli' || !session.imported) {
-                return formatTimestamp(ts);
-            }
-            if (interaction?.metadata?.timestamp_inferred) {
-                return '';
-            }
-            if (!interaction?.metadata?.original_timestamp) {
+            if (session.tool === 'codex-cli' && session.imported) {
                 return '';
             }
             return formatTimestamp(ts);
@@ -944,6 +1050,12 @@
                     const cwd = parsed.cwd;
                     if (typeof cwd === 'string' && cwd.trim()) {
                         return normalizeProjectPath(cwd.trim());
+                    }
+
+                    const payload = parsed.payload;
+                    const payloadCwd = payload && typeof payload === 'object' ? payload.cwd : null;
+                    if (typeof payloadCwd === 'string' && payloadCwd.trim()) {
+                        return normalizeProjectPath(payloadCwd.trim());
                     }
 
                     const action = parsed.action;
@@ -1003,6 +1115,39 @@
             if (!parsed) {
                 return `<div class="interaction-content"><pre>${escapeHtml(raw)}</pre></div>`;
             }
+
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                const ty = String(parsed.type || '').toLowerCase();
+                if (ty === 'event_msg') {
+                    const payloadType = String(parsed.payload?.type || '').toLowerCase();
+                    if (payloadType === 'agent_message' || payloadType === 'user_message') {
+                        const message = String(parsed.payload?.message || '').trim();
+                        const images = Array.isArray(parsed.payload?.images)
+                            ? parsed.payload.images.filter(Boolean)
+                            : [];
+                        const imagesHtml = images.length
+                            ? `
+                                <details class="json-details">
+                                    <summary>images (${images.length})</summary>
+                                    <div class="interaction-content">
+                                        ${images
+                                            .map(
+                                                (src) =>
+                                                    `<img src="${escapeHtml(String(src))}" style="max-width:100%; border:1px solid rgba(148,163,184,0.25); border-radius:8px; margin-top:10px;" />`
+                                            )
+                                            .join('')}
+                                    </div>
+                                </details>
+                            `
+                            : '';
+
+                        return `
+                            <div class="interaction-content"><pre>${escapeHtml(message || raw)}</pre></div>
+                            ${imagesHtml}
+                        `;
+                    }
+                }
+            }
             const summary = summarizeJson(parsed);
             const pretty = escapeHtml(JSON.stringify(parsed, null, 2));
             return `
@@ -1025,6 +1170,22 @@
 
         function summarizeJson(obj) {
             if (!obj || typeof obj !== 'object') return 'JSON';
+            if (obj.type === 'response_item' && obj.payload) {
+                return summarizeJson(obj.payload);
+            }
+            if (obj.type === 'event_msg') {
+                const payloadType = String(obj.payload?.type || '');
+                const message = typeof obj.payload?.message === 'string' ? obj.payload.message : '';
+                if (payloadType === 'agent_message') {
+                    const hint = summarizeFirstLine(message);
+                    return `assistant: ${hint || 'message'}`;
+                }
+                if (payloadType === 'user_message') {
+                    const hint = summarizeFirstLine(message);
+                    return `user: ${hint || 'message'}`;
+                }
+                return payloadType ? `event: ${payloadType}` : 'event';
+            }
             if (obj.type === 'function_call') {
                 const name = obj.name || 'tool';
                 const callId = obj.call_id ? ` (${obj.call_id})` : '';
