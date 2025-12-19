@@ -729,7 +729,7 @@
             const hh = String(d.getHours()).padStart(2, '0');
             const mm = String(d.getMinutes()).padStart(2, '0');
             const ss = String(d.getSeconds()).padStart(2, '0');
-            const m = String(iso).match(/\\.(\\d+)Z$/);
+            const m = String(iso).match(/\.(\d+)Z$/);
             if (!m) return `${hh}:${mm}:${ss}`;
             const frac = (m[1] + '000000').slice(0, 6);
             return `${hh}:${mm}:${ss}.${frac}`;
@@ -772,7 +772,7 @@
 
         function parseRolloutTimestamp(sessionId) {
             const s = String(sessionId || '');
-            const m = s.match(/rollout-(\\d{4}-\\d{2}-\\d{2})T(\\d{2})-(\\d{2})-(\\d{2})/);
+            const m = s.match(/rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
             if (!m) return null;
             const iso = `${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`;
             const d = new Date(iso);
@@ -829,10 +829,10 @@
         }
 
         function inferCodexProjectContext(interactions) {
-            const reCwd = /Current working directory:\\s*([^\\n\\r]+)/i;
-            const reGitC = /\\bgit\\s+-C\\s+('[^']+'|\"[^\"]+\"|\\S+)/;
-            const reCd = /\\bcd\\s+('[^']+'|\"[^\"]+\"|[^&;\\n]+)/;
-            const rePath = /(\\/(?:Users|Volumes|private|opt|tmp)\\/[^\\s\"'<>\\)\\]\\}\\,;]+)/;
+            const reCwd = /Current working directory:\s*([^\n\r]+)/i;
+            const reGitC = /\bgit\s+-C\s+('[^']+'|"[^"]+"|\S+)/;
+            const reCd = /\bcd\s+('[^']+'|"[^"]+"|[^&;\n]+)/;
+            const rePath = /(\/(?:Users|Volumes|private|opt|tmp)\/[^\s"'<>]+)/;
 
             const max = Math.min(interactions.length, 250);
             for (let idx = 0; idx < max; idx++) {
@@ -970,7 +970,7 @@
                     s = String(args);
                 }
             }
-            s = s.replace(/\\s+/g, ' ').trim();
+            s = s.replace(/\s+/g, ' ').trim();
             if (s.length > 140) s = s.slice(0, 140) + '…';
             return s;
         }
@@ -978,7 +978,7 @@
         function summarizeFirstLine(value) {
             if (value == null) return '';
             const s = String(value);
-            const first = s.split('\\n')[0].replace(/\\s+/g, ' ').trim();
+            const first = s.split('\n')[0].replace(/\s+/g, ' ').trim();
             if (!first) return '';
             return first.length > 140 ? first.slice(0, 140) + '…' : first;
         }
