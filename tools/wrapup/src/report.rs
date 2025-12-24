@@ -63,14 +63,14 @@ const STYLE: &str = r#"
             text-align: center;
         }
 
-        /* Bento Box Share Card */
+        /* Vibrant Bento V2 Share Card */
         .share-card {
-            width: 800px;
-            height: 500px;
+            width: 900px;
+            height: 600px;
             margin: 0 auto 20px auto;
             background: #0f1115;
-            border-radius: 32px;
-            padding: 30px;
+            border-radius: 40px;
+            padding: 40px;
             position: relative;
             color: #fff;
             box-shadow: 0 50px 100px -20px rgba(0,0,0,0.5);
@@ -81,89 +81,88 @@ const STYLE: &str = r#"
             border: 1px solid #333;
         }
         
-        .share-card::before {
-             content: '';
-             position: absolute;
-             top: 0;
-             left: 0;
-             right: 0;
-             height: 4px;
-             background: linear-gradient(90deg, #7c3aed, #db2777, #f59e0b);
-        }
-
-        .bento-header {
+        .share-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        .bento-title {
-            font-size: 1.2rem;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-        }
-        .bento-subtitle {
-            font-size: 0.9rem;
-            color: #666;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+            align-items: flex-end;
+            margin-bottom: 30px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 20px;
         }
 
-        .bento-grid {
+        .share-title h2 { margin: 0; font-size: 2rem; font-weight: 800; line-height: 1; }
+        .share-title span { color: #a78bfa; font-size: 1.2rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+
+        .share-body {
             display: grid;
-            grid-template-columns: 2fr 1fr 1fr;
-            grid-template-rows: 1.5fr 1fr;
-            gap: 16px;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 30px;
             flex: 1;
         }
 
-        .bento-item {
-            background: #181b21;
-            border-radius: 16px;
-            padding: 20px;
+        .left-col {
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
-            position: relative;
-        }
-        
-        .bento-item.hero {
-            grid-column: 1 / 2;
-            grid-row: 1 / 3;
-            background: linear-gradient(135deg, #1e1b4b 0%, #0f1115 100%);
-            border: 1px solid #2e1065;
+            gap: 20px;
         }
 
-        .bento-label {
+        .chart-tile {
+            background: #181b21;
+            border-radius: 24px;
+            padding: 20px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            border: 1px solid #2d333b;
+        }
+        
+        .chart-label {
             font-size: 0.8rem;
-            color: #949ba4;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 1px;
+            color: #949ba4;
+            margin-bottom: 10px;
             font-weight: 600;
         }
 
-        .bento-value {
-            font-size: 2rem;
-            font-weight: 700;
-            line-height: 1;
-            margin-top: 5px;
-        }
-
-        .bento-value.small { font-size: 1.5rem; }
-        .bento-value.text { font-size: 1.25rem; word-break: break-word; }
-
-        .sparkline-container {
+        .chart-canvas-wrapper {
             flex: 1;
-            width: 100%;
-            margin-top: 10px;
             position: relative;
+            width: 100%;
         }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+
+        .bubble-tile {
+            border-radius: 24px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            color: #000;
+            transition: transform 0.2s;
+        }
+
+        .bubble-tile h3 { margin: 0; font-size: 2.2rem; font-weight: 800; line-height: 1; }
+        .bubble-tile span { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; opacity: 0.7; margin-top: 5px; }
+
+        /* Gradients */
+        .g1 { background: linear-gradient(135deg, #a78bfa 0%, #ddd6fe 100%); } /* Prompts */
+        .g2 { background: linear-gradient(135deg, #f472b6 0%, #fbcfe8 100%); } /* Tokens */
+        .g3 { background: linear-gradient(135deg, #34d399 0%, #a7f3d0 100%); } /* Streak */
+        .g4 { background: linear-gradient(135deg, #60a5fa 0%, #bfdbfe 100%); } /* Questions */
+        .g5 { background: linear-gradient(135deg, #fbbf24 0%, #fde68a 100%); } /* Interrupts */
+        .g6 { background: linear-gradient(135deg, #f87171 0%, #fecaca 100%); } /* Words */
 
         .share-footer {
             margin-top: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+            text-align: center;
             font-size: 0.8rem;
             color: #444;
             font-weight: 600;
@@ -201,24 +200,16 @@ const SCRIPTS_TEMPLATE: &str = r#"
         });
     }
 
-    // Helper to get color
-    function getGradient(ctx, colorStart, colorEnd) {
-        const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-        gradient.addColorStop(0, colorStart);
-        gradient.addColorStop(1, colorEnd);
-        return gradient;
-    }
-
-    // Card Sparkline (Coding Clock)
-    const ctxCard = document.getElementById('cardSparkline').getContext('2d');
-    new Chart(ctxCard, {
+    // Card Chart 1: Coding Clock (Line)
+    const ctxCardSpark = document.getElementById('cardSparkline').getContext('2d');
+    new Chart(ctxCardSpark, {
         type: 'line',
         data: {
             labels: Array.from({length: 24}, (_, i) => i),
             datasets: [{
                 data: data.hourly_activity,
                 borderColor: '#a78bfa',
-                backgroundColor: 'rgba(124, 58, 237, 0.1)',
+                backgroundColor: 'rgba(167, 139, 250, 0.2)',
                 borderWidth: 2,
                 tension: 0.4,
                 pointRadius: 0,
@@ -228,16 +219,35 @@ const SCRIPTS_TEMPLATE: &str = r#"
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-            scales: {
-                y: { display: false },
-                x: { display: false }
-            },
-            layout: { padding: 0 }
+            plugins: { legend: { display: false } },
+            scales: { y: { display: false }, x: { display: false } },
+            layout: { padding: 5 }
         }
     });
 
-    // Tool Chart
+    // Card Chart 2: Intensity (Bar)
+    const ctxCardIntensity = document.getElementById('cardIntensity').getContext('2d');
+    new Chart(ctxCardIntensity, {
+        type: 'bar',
+        data: {
+            labels: data.daily_activity.map(x => x[0]),
+            datasets: [{
+                data: data.daily_activity.map(x => x[1]),
+                backgroundColor: '#34d399',
+                barPercentage: 1.0, 
+                categoryPercentage: 1.0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { display: false }, x: { display: false } },
+            layout: { padding: 5 }
+        }
+    });
+
+    // Tool Chart (Main Page)
     const ctxTool = document.getElementById('toolChart').getContext('2d');
     new Chart(ctxTool, {
         type: 'bar',
@@ -261,7 +271,7 @@ const SCRIPTS_TEMPLATE: &str = r#"
         }
     });
 
-    // Model Chart
+    // Model Chart (Main Page)
     const ctxModel = document.getElementById('modelChart').getContext('2d');
     new Chart(ctxModel, {
         type: 'doughnut',
@@ -282,7 +292,7 @@ const SCRIPTS_TEMPLATE: &str = r#"
         }
     });
 
-    // Hourly Chart
+    // Hourly (Main Page)
     const ctxHourly = document.getElementById('hourlyChart').getContext('2d');
     new Chart(ctxHourly, {
         type: 'line',
@@ -308,7 +318,7 @@ const SCRIPTS_TEMPLATE: &str = r#"
         }
     });
 
-    // Daily Chart (Intensity)
+    // Daily (Main Page)
     const ctxDaily = document.getElementById('dailyChart').getContext('2d');
     new Chart(ctxDaily, {
         type: 'bar',
@@ -343,11 +353,6 @@ pub fn generate_html_report(wrapup: &Wrapup) -> String {
     let badges = determine_badges(wrapup);
     let scripts = SCRIPTS_TEMPLATE.replace("JSON_DATA_PLACEHOLDER", &json_data);
 
-    let top_model = wrapup.top_models.first().map(|x| x.key.as_str()).unwrap_or("None");
-
-    // "Books Written" roughly 500k words per Encyclopedia, 1 token ~ 0.75 words -> 666k tokens = 1 book (approx)
-    let books_equivalent = wrapup.tokens.total_tokens as f64 / 750_000.0;
-
     let marathon_duration = wrapup.longest_session_by_duration.as_ref().map(|s| s.duration_seconds / 60).unwrap_or(0);
     let marathon_hrs = marathon_duration / 60;
     let marathon_mins = marathon_duration % 60;
@@ -374,70 +379,73 @@ r#"<!DOCTYPE html>
         <h1>AI Year in Review {}</h1>
         <div style="color: var(--text-secondary)">{} to {}</div>
     </header>
-
-    <div class="grid">
-        <div class="card" style="grid-column: 1 / -1; background: linear-gradient(135deg, #2e1065 0%, #1e1b4b 100%); border-color: #5b21b6; text-align: center;">
-            <div style="color: #a78bfa; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.875rem;">Your Coding Archetype</div>
-            <div style="font-size: 3rem; font-weight: 800; color: #fff; margin: 10px 0;">{}</div>
-            <p style="color: #c4b5fd; max-width: 600px; margin: 0 auto;">{}</p>
-            <div style="margin-top: 20px;">{}</div>
-        </div>
-    </div>
     
     <!-- Shareable Card Section -->
     <div class="share-section">
         <h2 style="margin-bottom: 20px;">Your 2025 Snapshot</h2>
         <div id="capture-card" class="share-card">
-            <div class="bento-header">
-                <div class="bento-title">My Year In Code</div>
-                <div class="bento-subtitle">2025 Wrapup</div>
+            <div class="share-header">
+                <div class="share-title">
+                    <span>My Year In Code</span>
+                    <h2>{}</h2> 
+                </div>
+                <div style="font-size: 1.5rem; font-weight: 700;">2025</div>
             </div>
             
-            <div class="bento-grid">
-                <!-- Hero: Coding Clock -->
-                <div class="bento-item hero">
-                    <div class="bento-label">Coding Clock</div>
-                    <div class="sparkline-container">
-                        <canvas id="cardSparkline"></canvas>
+            <div class="share-body">
+                <div class="left-col">
+                    <div class="chart-tile">
+                        <div class="chart-label">The Coding Clock</div>
+                        <div class="chart-canvas-wrapper"><canvas id="cardSparkline"></canvas></div>
+                    </div>
+                    <div class="chart-tile">
+                        <div class="chart-label">Yearly Intensity</div>
+                        <div class="chart-canvas-wrapper"><canvas id="cardIntensity"></canvas></div>
                     </div>
                 </div>
 
-                <!-- KPI 1 -->
-                <div class="bento-item">
-                    <div class="bento-label">Prompts</div>
-                    <div class="bento-value">{:.1}K</div>
-                </div>
-
-                <!-- KPI 2 -->
-                <div class="bento-item">
-                    <div class="bento-label">Stats</div>
-                    <div class="bento-value">{:.1}B <span style="font-size: 0.5em; opacity: 0.7; vertical-align: middle;">Tokens</span></div>
-                    <div style="font-size: 0.8em; color: #7c3aed; margin-top: 5px;">~{:.1} Books Written</div>
-                </div>
-
-                <!-- Detail 1: Projects -->
-                <div class="bento-item">
-                    <div class="bento-label">Projects</div>
-                    <div class="bento-value small">{}</div>
-                </div>
-
-                <!-- Detail 2: Top Model -->
-                <div class="bento-item">
-                    <div class="bento-label">Top Model</div>
-                    <div class="bento-value text">{}</div>
+                <div class="metric-grid">
+                     <div class="bubble-tile g1">
+                        <h3>{:.1}K</h3>
+                        <span>Prompts</span>
+                    </div>
+                    <div class="bubble-tile g2">
+                        <h3>{:.1}B</h3>
+                        <span>Tokens</span>
+                    </div>
+                    <div class="bubble-tile g3">
+                        <h3>{}</h3>
+                        <span>Streak (Days)</span>
+                    </div>
+                     <div class="bubble-tile g4">
+                        <h3>{:.0}%</h3>
+                        <span>Questions</span>
+                    </div>
+                    <div class="bubble-tile g5">
+                        <h3>{}</h3>
+                        <span>Interrupts</span>
+                    </div>
+                    <div class="bubble-tile g6">
+                        <h3>{:.0}</h3>
+                        <span>Avg Words</span>
+                    </div>
                 </div>
             </div>
 
             <div class="share-footer">
-                <div>Generated by Contrail</div>
-                <div>contrail.run</div>
+                contrail.run • Generated on {}
             </div>
         </div>
         <button class="download-btn" onclick="downloadImage()">Download Image</button>
     </div>
 
-    <!-- Stats Row 1 -->
-    <div class="grid">
+    <!-- Additional Stats Cards -->
+     <div class="grid">
+        <div class="card" style="background: linear-gradient(135deg, #2e1065 0%, #1e1b4b 100%); border-color: #5b21b6; text-align: center;">
+             <div style="color: #a78bfa; text-transform: uppercase;">Your Archetype</div>
+             <div style="font-size: 2rem; font-weight: 800; color: #fff;">{}</div>
+             <p style="color: #c4b5fd;">{}</p>
+        </div>
         <div class="card">
             <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">The Marathon</div>
              <div class="metric-value">{}</div>
@@ -447,11 +455,6 @@ r#"<!DOCTYPE html>
             <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Tech Stack</div>
             <div class="metric-value">{}</div>
             <div style="font-size: 0.9em; color: var(--text-secondary);">Most edited file type</div>
-        </div>
-         <div class="card">
-            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">The Interrupt</div>
-            <div class="metric-value">{}</div>
-            <div style="font-size: 0.9em; color: var(--text-secondary);">Times you stopped the AI</div>
         </div>
     </div>
 
@@ -483,28 +486,6 @@ r#"<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Productivity Table -->
-    <div class="grid">
-         <div class="card">
-            <div style="color: var(--text-secondary); margin-bottom: 15px;">Productivity Stats</div>
-            <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #2d333b;">
-                <span>Avg Words/Turn</span>
-                <strong>{:.1}</strong>
-            </div>
-             <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #2d333b;">
-                <span>Question Rate</span>
-                <strong>{:.1}%</strong>
-            </div>
-             <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #2d333b;">
-                <span>Edits Made</span>
-                <strong>{}</strong>
-            </div>
-             <div style="display: flex; justify-content: space-between; padding: 10px 0;">
-                <span>Clipboard Copies</span>
-                <strong>{}</strong>
-            </div>
-        </div>
-    </div>
 </div>
 {}
 </body>
@@ -520,28 +501,25 @@ r#"<!DOCTYPE html>
         wrapup.range_start.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
         wrapup.range_end.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
         
-        // Personality
-        personality.0,
-        personality.1,
-        badges,
+        // SHARE HEADER: Personality Name
+        personality.0, 
 
-        // BENTO BOX DATA
+        // METRICS GRID (6 TILES)
         wrapup.turns_total as f64 / 1000.0, // Prompts K
         wrapup.tokens.total_tokens as f64 / 1_000_000_000.0, // Tokens B
-        books_equivalent,                  // Books
-        wrapup.unique_projects,            // Projects
-        top_model,                         // Top Model (Text)
+        wrapup.longest_streak_days,        // Streak
+        wrapup.user_question_rate.unwrap_or(0.0), // Question Rate
+        wrapup.total_interrupts, // Interrupts
+        wrapup.user_avg_words.unwrap_or(0.0), // Avg Words
 
-        // NEW CARDS
+        // Footer Date
+        chrono::Local::now().format("%b %d, %Y"),
+
+        // Bottom Cards
+        personality.0,
+        personality.1,
         marathon_str,
         top_lang,
-        wrapup.total_interrupts,
-
-        // Productivity (Extra Table)
-        wrapup.user_avg_words.unwrap_or(0.0),
-        wrapup.user_question_rate.unwrap_or(0.0),
-        wrapup.file_effects,                  
-        wrapup.clipboard_hits,
 
         // Scripts
         scripts
