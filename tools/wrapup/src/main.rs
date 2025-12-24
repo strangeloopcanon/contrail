@@ -227,6 +227,10 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
     let mut range_end: Option<DateTime<Utc>> = None;
 
     let mut sessions: HashMap<(String, String), SessionAgg> = HashMap::new();
+    
+    // For session splitting
+    let mut last_seen_map: HashMap<(String, String), DateTime<Utc>> = HashMap::new();
+    let mut sub_session_index_map: HashMap<(String, String), usize> = HashMap::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -238,6 +242,23 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         if log.timestamp.year() != year {
             continue;
         }
+
+        // Determine Effective Session ID (Time-Gap Split)
+        let raw_key = (log.source_tool.clone(), log.session_id.clone());
+        let last_ts = *last_seen_map.get(&raw_key).unwrap_or(&log.timestamp);
+        
+        let gap = log.timestamp.signed_duration_since(last_ts);
+        if gap > chrono::Duration::minutes(30) {
+             *sub_session_index_map.entry(raw_key.clone()).or_insert(0) += 1;
+        }
+        last_seen_map.insert(raw_key.clone(), log.timestamp);
+        
+        let sub_idx = *sub_session_index_map.get(&raw_key).unwrap_or(&0);
+        let effective_session_id = if sub_idx > 0 {
+            format!("{}#{}", log.session_id, sub_idx)
+        } else {
+            log.session_id.clone()
+        };
 
         turns_total += 1;
         let local_ts = log.timestamp.with_timezone(&Local);
@@ -276,7 +297,6 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
                     if let Some(path) = path_str {
                          if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
                              let ext = ext.to_lowercase();
-                             // Filter out common non-code formats (optional, but cleaner)
                              if !matches!(ext.as_str(), "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock") {
                                  *language_counts.entry(ext).or_insert(0) += 1;
                              }
@@ -289,10 +309,10 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                let key = (log.source_tool.clone(), log.session_id.clone());
+                let key = (log.source_tool.clone(), effective_session_id.clone());
                 let sess = sessions.entry(key).or_insert_with(|| SessionAgg {
                     source_tool: log.source_tool.clone(),
-                    session_id: log.session_id.clone(),
+                    session_id: effective_session_id.clone(),
                     ..Default::default()
                 });
                 sess.interrupted = true;
@@ -331,10 +351,10 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         }
 
         // Session aggregation
-        let key = (log.source_tool.clone(), log.session_id.clone());
+        let key = (log.source_tool.clone(), effective_session_id.clone());
         let sess = sessions.entry(key).or_insert_with(|| SessionAgg {
             source_tool: log.source_tool.clone(),
-            session_id: log.session_id.clone(),
+            session_id: effective_session_id.clone(),
             ..Default::default()
         });
         sess.turns += 1;
