@@ -18,14 +18,18 @@ Contrail is a local-first background service that acts as a "Flight Recorder" fo
 
 Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding usage. Includes stats like **"The Marathon"** (longest session), **"Books Written"** (token count), and your unique **Coding Persona**.
 
-**Generate Report:**
-```bash
-cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
-```
-
-**Output:**
-*   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
-*   Download your "Vibrant Bento" share card directly from the UI.
+### Quick Start
+1.  **Install & Build** (see [Installation](#-installation) below).
+2.  **Import History** (collects your past logs):
+    ```bash
+    cargo run -p importer
+    ```
+3.  **Generate Report**:
+    ```bash
+    cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
+    ```
+    *   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
+    *   Download your "Vibrant Bento" share card directly from the UI.
 
 ## 🚀 Installation
 
