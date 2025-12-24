@@ -65,7 +65,7 @@ const STYLE: &str = r#"
 
         .share-card {
             width: 600px;
-            height: 600px;
+            height: 700px; /* Increased height for 3 rows */
             margin: 0 auto 20px auto;
             background: linear-gradient(135deg, #FF9A9E 0%, #FECFEF 99%, #FECFEF 100%); 
             background: linear-gradient(45deg, #ff9a9e 0%, #fad0c4 99%, #fad0c4 100%);
@@ -94,16 +94,17 @@ const STYLE: &str = r#"
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
-            width: 80%;
+            width: 85%;
             height: 80%;
             position: relative;
+            align-content: center;
         }
 
         .bubble {
             background: rgba(255, 255, 255, 0.85);
             backdrop-filter: blur(10px);
-            border-radius: 50%;
-            aspect-ratio: 1;
+            border-radius: 30px; /* Slightly less round to accommodate text */
+            padding: 20px 10px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -114,16 +115,16 @@ const STYLE: &str = r#"
         }
 
         .bubble h3 {
-            font-size: 3rem;
+            font-size: 2.5rem; /* Slightly smaller for 6 items */
             margin: 0;
             color: #111;
             font-weight: 800;
-            letter-spacing: -2px;
+            letter-spacing: -1px;
             line-height: 1;
         }
         
         .bubble span {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 1px;
             color: #555;
@@ -329,6 +330,14 @@ r#"<!DOCTYPE html>
                     <h3>{:.0}%</h3>
                     <span>Questions</span>
                 </div>
+                <div class="bubble">
+                    <h3>{}</h3>
+                    <span>Projects</span>
+                </div>
+                <div class="bubble">
+                    <h3>{}</h3>
+                    <span>Edits</span>
+                </div>
             </div>
             <div class="share-footer">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -427,22 +436,26 @@ r#"<!DOCTYPE html>
         personality.1,
         badges,
 
-        // Bubbles
+        // Bubbles: Prompts, Tokens, Streak, Questions
         wrapup.turns_total as f64 / 1000.0, // Prompts K
         wrapup.tokens.total_tokens as f64 / 1_000_000_000.0, // Tokens B
         wrapup.longest_streak_days,
         wrapup.user_question_rate.unwrap_or(0.0),
+        
+        // NEW BUBBLES: Projects, Edits
+        wrapup.unique_projects,
+        wrapup.file_effects,
 
         // Cards
         wrapup.turns_total,
         wrapup.tokens.total_tokens as f64 / 1_000_000.0,
-        wrapup.unique_projects,               // <--- NEW: Total Projects
+        wrapup.unique_projects,               
         wrapup.sessions_by_tool.first().map(|x| x.key.clone()).unwrap_or("None".to_string()),
         
         // Productvity
         wrapup.user_avg_words.unwrap_or(0.0),
         wrapup.user_question_rate.unwrap_or(0.0),
-        wrapup.file_effects,                  // <--- Renamed to "Edits Made" in HTML
+        wrapup.file_effects,                  
         wrapup.clipboard_hits,
 
         // Scripts
