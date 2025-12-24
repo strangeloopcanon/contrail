@@ -8,6 +8,7 @@ pub struct ContrailConfig {
     pub cursor_storage: PathBuf,
     pub codex_root: PathBuf,
     pub claude_history: PathBuf,
+    pub claude_projects: PathBuf,
     pub antigravity_brain: PathBuf,
     pub enable_cursor: bool,
     pub enable_codex: bool,
@@ -38,6 +39,11 @@ impl ContrailConfig {
             claude_history: env_path(
                 "CONTRAIL_CLAUDE_HISTORY",
                 home.join(".claude/history.jsonl"),
+                home.as_path(),
+            ),
+            claude_projects: env_path(
+                "CONTRAIL_CLAUDE_PROJECTS",
+                home.join(".claude/projects"),
                 home.as_path(),
             ),
             antigravity_brain: env_path(

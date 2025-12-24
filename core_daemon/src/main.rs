@@ -73,12 +73,22 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let h5 = harvester.clone();
+    let claude_projects_handle = task::spawn(async move {
+        if enable_claude {
+            if let Err(e) = h5.run_claude_projects_watcher().await {
+                eprintln!("Claude Projects Watcher failed: {:?}", e);
+            }
+        }
+    });
+
     // Wait for tasks (they shouldn't finish unless error)
     let _ = tokio::join!(
         cursor_handle,
         codex_handle,
         antigravity_handle,
-        claude_handle
+        claude_handle,
+        claude_projects_handle
     );
 
     Ok(())

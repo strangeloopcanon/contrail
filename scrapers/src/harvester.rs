@@ -1,4 +1,4 @@
-use crate::claude::parse_claude_line;
+use crate::claude::{parse_claude_line, parse_claude_session_line};
 use crate::codex::parse_codex_line;
 use crate::config::ContrailConfig;
 use crate::cursor::{fingerprint, read_cursor_messages, timestamp_from_metadata};
@@ -577,6 +577,124 @@ impl Harvester {
             println!("Claude history not found at {:?}", claude_history);
         }
         Ok(())
+    }
+
+    /// Watch Claude Code's project session files for detailed token usage data.
+    /// These files are located in ~/.claude/projects/*/*.jsonl
+    pub async fn run_claude_projects_watcher(&self) -> Result<()> {
+        println!("Starting Claude Projects Watcher...");
+        let claude_projects = self.config.claude_projects.clone();
+
+        if !claude_projects.exists() {
+            println!("Claude projects directory not found at {:?}", claude_projects);
+            return Ok(());
+        }
+
+        println!("Watching Claude projects at {:?}", claude_projects);
+
+        // Track file positions for incremental reading
+        let mut file_positions: HashMap<PathBuf, u64> = HashMap::new();
+        let mut last_activity = Instant::now();
+        let mut generating = false;
+
+        loop {
+            // Scan all project directories
+            if let Ok(project_dirs) = fs::read_dir(&claude_projects) {
+                for project_entry in project_dirs.flatten() {
+                    let project_path = project_entry.path();
+                    if !project_path.is_dir() {
+                        continue;
+                    }
+
+                    // Scan for .jsonl files in this project
+                    if let Ok(session_files) = fs::read_dir(&project_path) {
+                        for session_entry in session_files.flatten() {
+                            let session_path = session_entry.path();
+                            if session_path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                                continue;
+                            }
+
+                            // Initialize position if new file
+                            let pos = file_positions.entry(session_path.clone()).or_insert(0);
+
+                            // Read new content
+                            if let Ok(file) = fs::File::open(&session_path) {
+                                let mut reader = BufReader::new(file);
+                                let current_len = reader.get_ref().metadata().map(|m| m.len()).unwrap_or(0);
+
+                                if current_len < *pos {
+                                    // File truncated/rotated
+                                    *pos = 0;
+                                }
+
+                                if current_len > *pos {
+                                    if reader.seek(SeekFrom::Start(*pos)).is_err() {
+                                        continue;
+                                    }
+
+                                    let mut line = String::new();
+                                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                                        let len = line.len() as u64;
+
+                                        if let Some(parsed) = parse_claude_session_line(&line) {
+                                            let project_context = parsed
+                                                .project_context
+                                                .clone()
+                                                .unwrap_or_else(|| "Claude Session".to_string());
+
+                                            let session_id = parsed
+                                                .session_id
+                                                .clone()
+                                                .unwrap_or_else(|| {
+                                                    session_path
+                                                        .file_stem()
+                                                        .and_then(|s| s.to_str())
+                                                        .unwrap_or("unknown")
+                                                        .to_string()
+                                                });
+
+                                            self.log_interaction_with_metadata(
+                                                "claude-code",
+                                                &session_id,
+                                                &project_context,
+                                                &parsed.content,
+                                                &parsed.role,
+                                                parsed.metadata,
+                                                parsed.timestamp,
+                                            )
+                                            .await?;
+
+                                            last_activity = Instant::now();
+                                            if !generating {
+                                                generating = true;
+                                                println!(
+                                                    "Claude Code active in project: {}",
+                                                    project_context
+                                                );
+                                            }
+                                        }
+
+                                        *pos += len;
+                                        line.clear();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Session end detection
+            if generating
+                && last_activity.elapsed() > Duration::from_secs(self.config.claude_silence_secs)
+            {
+                generating = false;
+                self.notifier
+                    .send_notification("AI Task Complete", "Claude Code finished.");
+            }
+
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
