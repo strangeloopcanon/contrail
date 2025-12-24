@@ -63,83 +63,110 @@ const STYLE: &str = r#"
             text-align: center;
         }
 
+        /* Bento Box Share Card */
         .share-card {
-            width: 600px;
-            height: 700px; /* Increased height for 3 rows */
+            width: 800px;
+            height: 500px;
             margin: 0 auto 20px auto;
-            background: linear-gradient(135deg, #FF9A9E 0%, #FECFEF 99%, #FECFEF 100%); 
-            background: linear-gradient(45deg, #ff9a9e 0%, #fad0c4 99%, #fad0c4 100%);
-            background: linear-gradient(to top, #a18cd1 0%, #fbc2eb 100%);
-            border-radius: 40px;
+            background: #0f1115;
+            border-radius: 32px;
+            padding: 30px;
             position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: #333;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            color: #fff;
+            box-shadow: 0 50px 100px -20px rgba(0,0,0,0.5);
             font-family: 'Inter', sans-serif;
             overflow: hidden;
-        }
-        
-        .share-card.aurora {
-            background: radial-gradient(circle at 0% 0%, #a78bfa 0%, transparent 50%), 
-                        radial-gradient(circle at 100% 0%, #f472b6 0%, transparent 50%),
-                        radial-gradient(circle at 100% 100%, #34d399 0%, transparent 50%),
-                        radial-gradient(circle at 0% 100%, #60a5fa 0%, transparent 50%),
-                        #f3f4f6;
-        }
-
-        .bubble-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            width: 85%;
-            height: 80%;
-            position: relative;
-            align-content: center;
-        }
-
-        .bubble {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(10px);
-            border-radius: 30px; /* Slightly less round to accommodate text */
-            padding: 20px 10px;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
-            transition: transform 0.3s ease;
-        }
-
-        .bubble h3 {
-            font-size: 2.5rem; /* Slightly smaller for 6 items */
-            margin: 0;
-            color: #111;
-            font-weight: 800;
-            letter-spacing: -1px;
-            line-height: 1;
+            border: 1px solid #333;
         }
         
-        .bubble span {
-            font-size: 0.75rem;
+        .share-card::before {
+             content: '';
+             position: absolute;
+             top: 0;
+             left: 0;
+             right: 0;
+             height: 4px;
+             background: linear-gradient(90deg, #7c3aed, #db2777, #f59e0b);
+        }
+
+        .bento-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .bento-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .bento-subtitle {
+            font-size: 0.9rem;
+            color: #666;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: #555;
-            margin-top: 5px;
+        }
+
+        .bento-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            grid-template-rows: 1.5fr 1fr;
+            gap: 16px;
+            flex: 1;
+        }
+
+        .bento-item {
+            background: #181b21;
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+        }
+        
+        .bento-item.hero {
+            grid-column: 1 / 2;
+            grid-row: 1 / 3;
+            background: linear-gradient(135deg, #1e1b4b 0%, #0f1115 100%);
+            border: 1px solid #2e1065;
+        }
+
+        .bento-label {
+            font-size: 0.8rem;
+            color: #949ba4;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
             font-weight: 600;
+        }
+
+        .bento-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1;
+            margin-top: 5px;
+        }
+
+        .bento-value.small { font-size: 1.5rem; }
+        .bento-value.text { font-size: 1.25rem; word-break: break-word; }
+
+        .sparkline-container {
+            flex: 1;
+            width: 100%;
+            margin-top: 10px;
+            position: relative;
         }
 
         .share-footer {
-            position: absolute;
-            bottom: 30px;
+            margin-top: 20px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: #444;
             font-weight: 600;
-            color: #333;
         }
 
         button.download-btn {
@@ -166,13 +193,49 @@ const SCRIPTS_TEMPLATE: &str = r#"
 
     function downloadImage() {
         const node = document.getElementById('capture-card');
-        html2canvas(node, { scale: 2, backgroundColor: null }).then(canvas => {
+        html2canvas(node, { scale: 2, backgroundColor: '#0f1115' }).then(canvas => {
             const link = document.createElement('a');
             link.download = 'my-ai-year.png';
             link.href = canvas.toDataURL();
             link.click();
         });
     }
+
+    // Helper to get color
+    function getGradient(ctx, colorStart, colorEnd) {
+        const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+        gradient.addColorStop(0, colorStart);
+        gradient.addColorStop(1, colorEnd);
+        return gradient;
+    }
+
+    // Card Sparkline (Coding Clock)
+    const ctxCard = document.getElementById('cardSparkline').getContext('2d');
+    new Chart(ctxCard, {
+        type: 'line',
+        data: {
+            labels: Array.from({length: 24}, (_, i) => i),
+            datasets: [{
+                data: data.hourly_activity,
+                borderColor: '#a78bfa',
+                backgroundColor: 'rgba(124, 58, 237, 0.1)',
+                borderWidth: 2,
+                tension: 0.4,
+                pointRadius: 0,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+                y: { display: false },
+                x: { display: false }
+            },
+            layout: { padding: 0 }
+        }
+    });
 
     // Tool Chart
     const ctxTool = document.getElementById('toolChart').getContext('2d');
@@ -280,6 +343,8 @@ pub fn generate_html_report(wrapup: &Wrapup) -> String {
     let badges = determine_badges(wrapup);
     let scripts = SCRIPTS_TEMPLATE.replace("JSON_DATA_PLACEHOLDER", &json_data);
 
+    let top_model = wrapup.top_models.first().map(|x| x.key.as_str()).unwrap_or("None");
+
     format!(
 r#"<!DOCTYPE html>
 <html lang="en">
@@ -312,58 +377,52 @@ r#"<!DOCTYPE html>
     <!-- Shareable Card Section -->
     <div class="share-section">
         <h2 style="margin-bottom: 20px;">Your 2025 Snapshot</h2>
-        <div id="capture-card" class="share-card aurora">
-            <div class="bubble-grid">
-                <div class="bubble">
-                    <h3>{:.1}K</h3>
-                    <span>Prompts</span>
+        <div id="capture-card" class="share-card">
+            <div class="bento-header">
+                <div class="bento-title">My Year In Code</div>
+                <div class="bento-subtitle">2025 Wrapup</div>
+            </div>
+            
+            <div class="bento-grid">
+                <!-- Hero: Coding Clock -->
+                <div class="bento-item hero">
+                    <div class="bento-label">Coding Clock</div>
+                    <div class="sparkline-container">
+                        <canvas id="cardSparkline"></canvas>
+                    </div>
                 </div>
-                <div class="bubble">
-                    <h3>{:.1}B</h3>
-                    <span>Tokens</span>
+
+                <!-- KPI 1 -->
+                <div class="bento-item">
+                    <div class="bento-label">Prompts</div>
+                    <div class="bento-value">{:.1}K</div>
                 </div>
-                <div class="bubble">
-                    <h3>{}</h3>
-                    <span>Streak (Days)</span>
+
+                <!-- KPI 2 -->
+                <div class="bento-item">
+                    <div class="bento-label">Tokens</div>
+                    <div class="bento-value">{:.1}B</div>
                 </div>
-                <div class="bubble">
-                    <h3>{:.0}%</h3>
-                    <span>Questions</span>
+
+                <!-- Detail 1: Projects -->
+                <div class="bento-item">
+                    <div class="bento-label">Projects</div>
+                    <div class="bento-value small">{}</div>
                 </div>
-                <div class="bubble">
-                    <h3>{}</h3>
-                    <span>Projects</span>
-                </div>
-                <div class="bubble">
-                    <h3>{}</h3>
-                    <span>Edits</span>
+
+                <!-- Detail 2: Top Model -->
+                <div class="bento-item">
+                    <div class="bento-label">Top Model</div>
+                    <div class="bento-value text">{}</div>
                 </div>
             </div>
+
             <div class="share-footer">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Your Year with AI
+                <div>Generated by Contrail</div>
+                <div>contrail.run</div>
             </div>
         </div>
         <button class="download-btn" onclick="downloadImage()">Download Image</button>
-    </div>
-
-    <div class="grid">
-        <div class="card">
-            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Total Prompts</div>
-            <div class="metric-value">{}</div>
-        </div>
-        <div class="card">
-            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Tokens Consumed</div>
-            <div class="metric-value">{:.1}M</div>
-        </div>
-         <div class="card">
-            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Total Projects</div>
-            <div class="metric-value">{}</div>
-        </div>
-         <div class="card">
-            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Top Tool</div>
-            <div class="metric-value">{}</div>
-        </div>
     </div>
 
     <!-- Charts Row 1 -->
@@ -436,23 +495,13 @@ r#"<!DOCTYPE html>
         personality.1,
         badges,
 
-        // Bubbles: Prompts, Tokens, Streak, Questions
+        // BENTO BOX DATA
         wrapup.turns_total as f64 / 1000.0, // Prompts K
         wrapup.tokens.total_tokens as f64 / 1_000_000_000.0, // Tokens B
-        wrapup.longest_streak_days,
-        wrapup.user_question_rate.unwrap_or(0.0),
-        
-        // NEW BUBBLES: Projects, Edits
-        wrapup.unique_projects,
-        wrapup.file_effects,
+        wrapup.unique_projects,            // Projects
+        top_model,                         // Top Model (Text)
 
-        // Cards
-        wrapup.turns_total,
-        wrapup.tokens.total_tokens as f64 / 1_000_000.0,
-        wrapup.unique_projects,               
-        wrapup.sessions_by_tool.first().map(|x| x.key.clone()).unwrap_or("None".to_string()),
-        
-        // Productvity
+        // Productivity (Extra Table)
         wrapup.user_avg_words.unwrap_or(0.0),
         wrapup.user_question_rate.unwrap_or(0.0),
         wrapup.file_effects,                  
