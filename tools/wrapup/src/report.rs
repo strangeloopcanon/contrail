@@ -195,8 +195,10 @@ const SCRIPTS_TEMPLATE: &str = r#"
         html2canvas(node, { scale: 2, backgroundColor: '#0f1115' }).then(canvas => {
             const link = document.createElement('a');
             link.download = 'my-ai-year.png';
-            link.href = canvas.toDataURL();
+            link.href = canvas.toDataURL('image/png');
+            document.body.appendChild(link);
             link.click();
+            document.body.removeChild(link);
         });
     }
 
