@@ -149,6 +149,19 @@ Endpoints:
 - **(Optional) Live UI:** `cargo run -p dashboard` at `http://127.0.0.1:3000`.
 - **(Optional/manual) Historical backfill:** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
 
+## 🎁 AI Year in Code (Wrapup)
+
+Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding usage. Includes stats like **"The Marathon"** (longest session), **"Books Written"** (token count), and your unique **Coding Persona**.
+
+**Generate Report:**
+```bash
+cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
+```
+
+**Output:**
+*   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
+*   Download your "Vibrant Bento" share card directly from the UI.
+
 ## 🔧 Supported Tools Configuration
 
 Contrail automatically watches standard paths. Ensure your tools are installed in their default locations:
