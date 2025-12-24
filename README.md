@@ -14,6 +14,19 @@ Contrail is a local-first background service that acts as a "Flight Recorder" fo
 *   **Privacy First:** All data is stored locally in `~/.contrail/logs/master_log.jsonl`.
 *   **DLP (Data Loss Prevention):** Basic regex-based redaction for secrets (API keys) before logging.
 
+## 🎁 AI Year in Code (Wrapup)
+
+Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding usage. Includes stats like **"The Marathon"** (longest session), **"Books Written"** (token count), and your unique **Coding Persona**.
+
+**Generate Report:**
+```bash
+cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
+```
+
+**Output:**
+*   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
+*   Download your "Vibrant Bento" share card directly from the UI.
+
 ## 🚀 Installation
 
 ### Prerequisites
@@ -149,18 +162,6 @@ Endpoints:
 - **(Optional) Live UI:** `cargo run -p dashboard` at `http://127.0.0.1:3000`.
 - **(Optional/manual) Historical backfill:** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
 
-## 🎁 AI Year in Code (Wrapup)
-
-Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding usage. Includes stats like **"The Marathon"** (longest session), **"Books Written"** (token count), and your unique **Coding Persona**.
-
-**Generate Report:**
-```bash
-cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
-```
-
-**Output:**
-*   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
-*   Download your "Vibrant Bento" share card directly from the UI.
 
 ## 🔧 Supported Tools Configuration
 
