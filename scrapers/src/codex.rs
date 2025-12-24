@@ -15,6 +15,8 @@ pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
     let json = serde_json::from_str::<Value>(raw).ok()?;
     let mut metadata = Map::new();
 
+    let _ = append_token_count_usage(&mut metadata, &json);
+
     let project_context = json
         .pointer("/payload/cwd")
         .or_else(|| json.pointer("/turn_context/cwd"))
@@ -100,8 +102,133 @@ fn derive_role_override(json: &Value) -> Option<String> {
         if payload_type.eq_ignore_ascii_case("agent_message") {
             return Some("assistant".to_string());
         }
+        if payload_type.eq_ignore_ascii_case("token_count") {
+            return Some("system".to_string());
+        }
     }
     None
+}
+
+fn append_token_count_usage(meta: &mut Map<String, Value>, json: &Value) -> Option<String> {
+    let record_type = json.get("type").and_then(Value::as_str)?;
+    if !record_type.eq_ignore_ascii_case("event_msg") {
+        return None;
+    }
+    let payload_type = json.pointer("/payload/type").and_then(Value::as_str)?;
+    if !payload_type.eq_ignore_ascii_case("token_count") {
+        return None;
+    }
+
+    meta.insert(
+        "codex_event_type".to_string(),
+        Value::String("token_count".to_string()),
+    );
+
+    if let Some(window) = json
+        .pointer("/payload/info/model_context_window")
+        .and_then(Value::as_i64)
+    {
+        meta.insert(
+            "model_context_window".to_string(),
+            Value::Number(window.into()),
+        );
+    }
+
+    let total_usage = json.pointer("/payload/info/total_token_usage");
+    let last_usage = json.pointer("/payload/info/last_token_usage");
+
+    let total_total = total_usage
+        .and_then(|v| v.get("total_tokens"))
+        .and_then(Value::as_i64);
+    let total_input = total_usage
+        .and_then(|v| v.get("input_tokens"))
+        .and_then(Value::as_i64);
+    let total_output = total_usage
+        .and_then(|v| v.get("output_tokens"))
+        .and_then(Value::as_i64);
+    let total_cached_input = total_usage
+        .and_then(|v| v.get("cached_input_tokens"))
+        .and_then(Value::as_i64);
+    let total_reasoning = total_usage
+        .and_then(|v| v.get("reasoning_output_tokens"))
+        .and_then(Value::as_i64);
+
+    if let Some(n) = total_total {
+        meta.insert(
+            "usage_cumulative_total_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = total_input {
+        meta.insert(
+            "usage_cumulative_prompt_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = total_output {
+        meta.insert(
+            "usage_cumulative_completion_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = total_cached_input {
+        meta.insert(
+            "usage_cumulative_cached_input_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = total_reasoning {
+        meta.insert(
+            "usage_cumulative_reasoning_output_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+
+    let last_total = last_usage
+        .and_then(|v| v.get("total_tokens"))
+        .and_then(Value::as_i64);
+    let last_input = last_usage
+        .and_then(|v| v.get("input_tokens"))
+        .and_then(Value::as_i64);
+    let last_output = last_usage
+        .and_then(|v| v.get("output_tokens"))
+        .and_then(Value::as_i64);
+    let last_cached_input = last_usage
+        .and_then(|v| v.get("cached_input_tokens"))
+        .and_then(Value::as_i64);
+    let last_reasoning = last_usage
+        .and_then(|v| v.get("reasoning_output_tokens"))
+        .and_then(Value::as_i64);
+
+    if let Some(n) = last_total {
+        meta.insert("usage_total_tokens".to_string(), Value::Number(n.into()));
+    }
+    if let Some(n) = last_input {
+        meta.insert("usage_prompt_tokens".to_string(), Value::Number(n.into()));
+    }
+    if let Some(n) = last_output {
+        meta.insert(
+            "usage_completion_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = last_cached_input {
+        meta.insert(
+            "usage_cached_input_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+    if let Some(n) = last_reasoning {
+        meta.insert(
+            "usage_reasoning_output_tokens".to_string(),
+            Value::Number(n.into()),
+        );
+    }
+
+    Some(format!(
+        "Token count: last_total={:?}, cumulative_total={:?}",
+        last_total, total_total
+    ))
 }
 
 fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
@@ -199,5 +326,46 @@ mod tests {
         let parsed = parse_codex_line(raw).expect("should parse");
         assert_eq!(parsed.role, "user");
         assert!(parsed.content.contains("\"user_message\""));
+    }
+
+    #[test]
+    fn parses_token_count_event_into_usage_metadata() {
+        let raw = r#"{
+            "timestamp": "2025-12-15T06:10:28.257Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": { "input_tokens": 100, "output_tokens": 50, "total_tokens": 150 },
+                    "last_token_usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 },
+                    "model_context_window": 258400
+                }
+            }
+        }"#;
+
+        let parsed = parse_codex_line(raw).expect("should parse");
+        assert_eq!(parsed.role, "system");
+        assert!(parsed.content.contains("\"token_count\""));
+        assert_eq!(
+            parsed
+                .metadata
+                .get("usage_total_tokens")
+                .and_then(Value::as_i64),
+            Some(15)
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("usage_cumulative_total_tokens")
+                .and_then(Value::as_i64),
+            Some(150)
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("model_context_window")
+                .and_then(Value::as_i64),
+            Some(258400)
+        );
     }
 }

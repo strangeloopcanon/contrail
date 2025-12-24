@@ -35,7 +35,7 @@ pub fn read_cursor_messages(db_path: &Path) -> Result<Vec<CursorMessage>> {
 
     let conn = Connection::open(&temp_path).context("failed to open Cursor DB snapshot")?;
     let mut stmt = conn.prepare(
-        "SELECT key, value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%'",
+        "SELECT key, value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' ORDER BY key",
     )?;
     let rows = stmt.query_map([], |row| {
         let key: String = row.get(0)?;

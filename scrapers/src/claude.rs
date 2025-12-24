@@ -96,7 +96,18 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
         return None;
     }
 
-    let role = msg_type.to_string();
+    // Check if this is a real user message vs tool result
+    // Real user messages have "userType": "external", tool results don't
+    let is_external_user = json.get("userType")
+        .and_then(Value::as_str) == Some("external");
+
+    // Tool results have role="user" but no userType="external"
+    // Mark them distinctly so wrapup can filter them out
+    let role = if msg_type == "user" && !is_external_user {
+        "tool_result".to_string()
+    } else {
+        msg_type.to_string()
+    };
 
     // Extract session ID
     let session_id = json
@@ -166,7 +177,13 @@ fn extract_message_content(json: &Value) -> Option<String> {
         if let Some(text) = item.get("text").and_then(Value::as_str) {
             // Truncate very long text content
             let truncated = if text.len() > 2000 {
-                format!("{}...[truncated]", &text[..2000])
+                // Find the nearest character boundary to avoid panicking on multi-byte UTF-8
+                let boundary = text.char_indices()
+                    .take_while(|(i, _)| *i < 2000)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                format!("{}...[truncated]", &text[..boundary])
             } else {
                 text.to_string()
             };
@@ -380,5 +397,50 @@ mod tests {
 
         let result = parse_claude_session_line(raw);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn truncates_utf8_safely() {
+        // Create content with multi-byte chars that would panic at byte 2000
+        // Using em-dash (─) which is 3 bytes each
+        let long_text = "─".repeat(700); // 3 bytes × 700 = 2100 bytes
+        let raw = format!(
+            r#"{{
+            "type": "assistant",
+            "timestamp": "2025-12-01T00:00:00Z",
+            "sessionId": "test-utf8",
+            "message": {{ "content": [{{"type": "text", "text": "{}"}}] }}
+        }}"#,
+            long_text
+        );
+        // Should not panic and should parse successfully
+        let result = parse_claude_session_line(&raw);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert!(parsed.content.contains("...[truncated]"));
+    }
+
+    #[test]
+    fn distinguishes_tool_result_from_real_user() {
+        // Real user message has userType: "external"
+        let real_user = r#"{
+            "type": "user",
+            "userType": "external",
+            "timestamp": "2025-12-01T00:00:00Z",
+            "sessionId": "test",
+            "message": { "content": [{"type": "text", "text": "Hello"}] }
+        }"#;
+        let parsed = parse_claude_session_line(real_user).expect("should parse");
+        assert_eq!(parsed.role, "user");
+
+        // Tool result has type: "user" but no userType
+        let tool_result = r#"{
+            "type": "user",
+            "timestamp": "2025-12-01T00:00:00Z",
+            "sessionId": "test",
+            "message": { "content": [{"type": "tool_result", "tool_use_id": "123", "content": "ok"}] }
+        }"#;
+        let parsed = parse_claude_session_line(tool_result).expect("should parse");
+        assert_eq!(parsed.role, "tool_result");
     }
 }

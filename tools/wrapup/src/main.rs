@@ -23,12 +23,19 @@ struct SessionAgg {
     file_effects: usize,
     models: HashSet<String>,
     git_branches: HashSet<String>,
+    // Cumulative tokens (Codex style - take max)
     token_cumulative_total_max: u64,
     token_cumulative_prompt_max: u64,
     token_cumulative_completion_max: u64,
     token_cumulative_cached_input_max: u64,
     token_cumulative_reasoning_output_max: u64,
     saw_token_cumulative: bool,
+    // Per-turn tokens (Claude Code style - sum across session)
+    token_sum_prompt: u64,
+    token_sum_completion: u64,
+    token_sum_cached_input: u64,
+    token_sum_cache_creation: u64,
+    saw_token_per_turn: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -649,6 +656,7 @@ fn summarize_tokens(sessions: &HashMap<(String, String), SessionAgg>) -> TokensS
     let mut reasoning_output = 0u64;
 
     for sess in sessions.values() {
+        // Cumulative tokens (Codex style)
         if sess.saw_token_cumulative && sess.token_cumulative_total_max > 0 {
             sessions_with += 1;
             total += sess.token_cumulative_total_max;
@@ -656,6 +664,16 @@ fn summarize_tokens(sessions: &HashMap<(String, String), SessionAgg>) -> TokensS
             completion += sess.token_cumulative_completion_max;
             cached_input += sess.token_cumulative_cached_input_max;
             reasoning_output += sess.token_cumulative_reasoning_output_max;
+        }
+        // Per-turn tokens (Claude Code style) - sum them up
+        else if sess.saw_token_per_turn && (sess.token_sum_prompt > 0 || sess.token_sum_completion > 0) {
+            sessions_with += 1;
+            let session_total = sess.token_sum_prompt + sess.token_sum_completion;
+            total += session_total;
+            prompt += sess.token_sum_prompt;
+            completion += sess.token_sum_completion;
+            cached_input += sess.token_sum_cached_input;
+            // Note: cache_creation tokens are counted separately, not added to cached_input
         }
     }
 
@@ -681,6 +699,7 @@ fn update_cumulative_tokens_from_metadata(
         })
     };
 
+    // Cumulative tokens (Codex style) - take max
     let total = read_u64("usage_cumulative_total_tokens").unwrap_or(0);
     if total > 0 {
         sess.saw_token_cumulative = true;
@@ -697,6 +716,17 @@ fn update_cumulative_tokens_from_metadata(
         sess.token_cumulative_reasoning_output_max = sess
             .token_cumulative_reasoning_output_max
             .max(read_u64("usage_cumulative_reasoning_output_tokens").unwrap_or(0));
+    }
+
+    // Per-turn tokens (Claude Code style) - sum across session
+    let prompt_turn = read_u64("usage_prompt_tokens").unwrap_or(0);
+    let completion_turn = read_u64("usage_completion_tokens").unwrap_or(0);
+    if prompt_turn > 0 || completion_turn > 0 {
+        sess.saw_token_per_turn = true;
+        sess.token_sum_prompt += prompt_turn;
+        sess.token_sum_completion += completion_turn;
+        sess.token_sum_cached_input += read_u64("usage_cached_input_tokens").unwrap_or(0);
+        sess.token_sum_cache_creation += read_u64("usage_cache_creation_tokens").unwrap_or(0);
     }
 }
 
