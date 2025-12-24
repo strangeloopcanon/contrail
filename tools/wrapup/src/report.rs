@@ -194,14 +194,8 @@ const SCRIPTS_TEMPLATE: &str = r#"
         const node = document.getElementById('capture-card');
         html2canvas(node, { scale: 2, backgroundColor: '#0f1115' }).then(canvas => {
             canvas.toBlob(function(blob) {
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.download = 'my-ai-year.png';
-                link.href = url;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
+                // Use saveAs from FileSaver.js for cross-browser support
+                saveAs(blob, 'my-ai-year.png');
             }, 'image/png');
         });
     }
@@ -375,6 +369,7 @@ r#"<!DOCTYPE html>
     <title>AI Year in Review {}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <style>{}</style>
 </head>
 <body>
