@@ -193,23 +193,12 @@ const SCRIPTS_TEMPLATE: &str = r#"
     function downloadImage() {
         const node = document.getElementById('capture-card');
         html2canvas(node, { scale: 2, backgroundColor: '#0f1115' }).then(canvas => {
-            canvas.toBlob(function(blob) {
-                const url = URL.createObjectURL(blob);
-                // Open in new tab - user can right-click save
-                const newTab = window.open();
-                if (newTab) {
-                    newTab.document.write('<html><head><title>Right-click to Save Image</title></head><body style="margin:0;background:#000;display:flex;justify-content:center;align-items:center;min-height:100vh;"><img src="' + url + '" style="max-width:100%;"/></body></html>');
-                    newTab.document.close();
-                } else {
-                    // Popup blocked - try direct download
-                    const link = document.createElement('a');
-                    link.download = 'my-ai-year.png';
-                    link.href = url;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                }
-            }, 'image/png');
+            const link = document.createElement('a');
+            link.download = 'my-ai-year.png';
+            link.href = canvas.toDataURL('image/png');
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         });
     }
 
