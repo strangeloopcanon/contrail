@@ -193,12 +193,16 @@ const SCRIPTS_TEMPLATE: &str = r#"
     function downloadImage() {
         const node = document.getElementById('capture-card');
         html2canvas(node, { scale: 2, backgroundColor: '#0f1115' }).then(canvas => {
-            const link = document.createElement('a');
-            link.download = 'my-ai-year.png';
-            link.href = canvas.toDataURL('image/png');
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            canvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = 'my-ai-year.png';
+                link.href = url;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }, 'image/png');
         });
     }
 
