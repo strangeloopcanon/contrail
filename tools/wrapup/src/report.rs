@@ -345,6 +345,16 @@ pub fn generate_html_report(wrapup: &Wrapup) -> String {
 
     let top_model = wrapup.top_models.first().map(|x| x.key.as_str()).unwrap_or("None");
 
+    // "Books Written" roughly 500k words per Encyclopedia, 1 token ~ 0.75 words -> 666k tokens = 1 book (approx)
+    let books_equivalent = wrapup.tokens.total_tokens as f64 / 750_000.0;
+
+    let marathon_duration = wrapup.longest_session_by_duration.as_ref().map(|s| s.duration_seconds / 60).unwrap_or(0);
+    let marathon_hrs = marathon_duration / 60;
+    let marathon_mins = marathon_duration % 60;
+    let marathon_str = if marathon_hrs > 0 { format!("{}h {}m", marathon_hrs, marathon_mins) } else { format!("{}m", marathon_mins) };
+
+    let top_lang = wrapup.languages.first().map(|x| x.key.as_str()).unwrap_or("None");
+
     format!(
 r#"<!DOCTYPE html>
 <html lang="en">
@@ -400,8 +410,9 @@ r#"<!DOCTYPE html>
 
                 <!-- KPI 2 -->
                 <div class="bento-item">
-                    <div class="bento-label">Tokens</div>
-                    <div class="bento-value">{:.1}B</div>
+                    <div class="bento-label">Stats</div>
+                    <div class="bento-value">{:.1}B <span style="font-size: 0.5em; opacity: 0.7; vertical-align: middle;">Tokens</span></div>
+                    <div style="font-size: 0.8em; color: #7c3aed; margin-top: 5px;">~{:.1} Books Written</div>
                 </div>
 
                 <!-- Detail 1: Projects -->
@@ -423,6 +434,25 @@ r#"<!DOCTYPE html>
             </div>
         </div>
         <button class="download-btn" onclick="downloadImage()">Download Image</button>
+    </div>
+
+    <!-- Stats Row 1 -->
+    <div class="grid">
+        <div class="card">
+            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">The Marathon</div>
+             <div class="metric-value">{}</div>
+             <div style="font-size: 0.9em; color: var(--text-secondary);">Longest continuous session</div>
+        </div>
+        <div class="card">
+            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Tech Stack</div>
+            <div class="metric-value">{}</div>
+            <div style="font-size: 0.9em; color: var(--text-secondary);">Most edited file type</div>
+        </div>
+         <div class="card">
+            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">The Interrupt</div>
+            <div class="metric-value">{}</div>
+            <div style="font-size: 0.9em; color: var(--text-secondary);">Times you stopped the AI</div>
+        </div>
     </div>
 
     <!-- Charts Row 1 -->
@@ -498,8 +528,14 @@ r#"<!DOCTYPE html>
         // BENTO BOX DATA
         wrapup.turns_total as f64 / 1000.0, // Prompts K
         wrapup.tokens.total_tokens as f64 / 1_000_000_000.0, // Tokens B
+        books_equivalent,                  // Books
         wrapup.unique_projects,            // Projects
         top_model,                         // Top Model (Text)
+
+        // NEW CARDS
+        marathon_str,
+        top_lang,
+        wrapup.total_interrupts,
 
         // Productivity (Extra Table)
         wrapup.user_avg_words.unwrap_or(0.0),

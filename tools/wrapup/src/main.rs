@@ -95,6 +95,8 @@ pub struct Wrapup {
     pub user_code_hint_rate: Option<f64>,
     pub hourly_activity: Vec<u64>,
     pub daily_activity: Vec<(String, u64)>,
+    pub total_interrupts: u64,
+    pub languages: Vec<TopEntry>,
 }
 
 fn main() -> Result<()> {
@@ -214,6 +216,7 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
     let mut function_call_outputs: u64 = 0;
     let mut apply_patch_calls: u64 = 0;
     let mut antigravity_images: u64 = 0;
+    let mut language_counts: HashMap<String, u64> = HashMap::new();
 
     let mut user_turns: u64 = 0;
     let mut user_words: u64 = 0;
@@ -265,6 +268,21 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
             }
             if let Some(arr) = obj.get("file_effects").and_then(Value::as_array) {
                 file_effects += arr.len() as u64;
+                for effect in arr {
+                    // Try to get path as string or object field
+                    let path_str = effect.as_str()
+                        .or_else(|| effect.get("path").and_then(Value::as_str));
+                    
+                    if let Some(path) = path_str {
+                         if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
+                             let ext = ext.to_lowercase();
+                             // Filter out common non-code formats (optional, but cleaner)
+                             if !matches!(ext.as_str(), "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock") {
+                                 *language_counts.entry(ext).or_insert(0) += 1;
+                             }
+                         }
+                    }
+                }
             }
             if obj
                 .get("interrupted")
@@ -445,6 +463,9 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         compute_longest_sessions(&sessions);
 
     let tokens = summarize_tokens(&sessions);
+    
+    // Aggregates
+    let total_interrupts = sessions.values().filter(|s| s.interrupted).count() as u64;
 
     let mut hourly_activity = vec![0u64; 24];
     for (hour, count) in hourly {
@@ -494,6 +515,8 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         user_code_hint_rate: pct(user_code_hints, user_turns),
         hourly_activity,
         daily_activity,
+        total_interrupts,
+        languages: top_entries(language_counts, top_n),
     })
 }
 
