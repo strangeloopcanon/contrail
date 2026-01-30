@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 use scrapers::types::MasterLog;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -66,6 +66,31 @@ pub struct TokensSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CursorUsageSummary {
+    pub team_id: u32,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_write_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cost_cents: Option<f64>,
+    pub by_model: Vec<CursorModelUsage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CursorModelUsage {
+    pub model_intent: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub total_cents: Option<f64>,
+    pub request_cost: Option<f64>,
+    pub tier: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Wrapup {
     pub year: i32,
     pub range_start: Option<DateTime<Utc>>,
@@ -85,6 +110,7 @@ pub struct Wrapup {
     pub top_projects_by_sessions: Vec<TopEntry>,
     pub top_models: Vec<TopEntry>,
     pub tokens: TokensSummary,
+    pub cursor_usage: Option<CursorUsageSummary>,
     pub redacted_turns: u64,
     pub redacted_labels: Vec<TopEntry>,
     pub clipboard_hits: u64,
@@ -108,6 +134,10 @@ pub struct Wrapup {
 
 fn main() -> Result<()> {
     let mut year: Option<i32> = None;
+    let mut start: Option<DateTime<Utc>> = None;
+    let mut end: Option<DateTime<Utc>> = None;
+    let mut last_days: Option<i64> = None;
+    let mut include_cursor_usage = false;
     let mut log_path: Option<PathBuf> = None;
     let mut out_path: Option<PathBuf> = None;
     let mut top_n: usize = 10;
@@ -124,6 +154,25 @@ fn main() -> Result<()> {
             "--year" => {
                 let val = args.next().context("--year requires YYYY")?;
                 year = Some(val.parse::<i32>().context("invalid --year")?);
+            }
+            "--start" => {
+                let val = args
+                    .next()
+                    .context("--start requires DATE (YYYY-MM-DD) or RFC3339")?;
+                start = Some(parse_date_arg(&val, DateBoundary::Start)?);
+            }
+            "--end" => {
+                let val = args
+                    .next()
+                    .context("--end requires DATE (YYYY-MM-DD) or RFC3339")?;
+                end = Some(parse_date_arg(&val, DateBoundary::End)?);
+            }
+            "--last-days" => {
+                let val = args.next().context("--last-days requires N")?;
+                last_days = Some(val.parse::<i64>().context("invalid --last-days")?);
+            }
+            "--cursor-usage" => {
+                include_cursor_usage = true;
             }
             "--log" => {
                 let val = args.next().context("--log requires PATH")?;
@@ -147,16 +196,84 @@ fn main() -> Result<()> {
         }
     }
 
-    let year = year.unwrap_or_else(|| Local::now().year());
+    if last_days.is_some() && (start.is_some() || end.is_some()) {
+        anyhow::bail!("--last-days cannot be combined with --start/--end");
+    }
+
+    if last_days.is_some() && year.is_some() {
+        anyhow::bail!("--last-days cannot be combined with --year");
+    }
+
+    if (start.is_some() || end.is_some()) && year.is_some() {
+        anyhow::bail!("--start/--end cannot be combined with --year");
+    }
+
+    if let Some(days) = last_days {
+        if days <= 0 {
+            anyhow::bail!("--last-days must be a positive integer");
+        }
+        let range_end = Utc::now();
+        let range_start = range_end - chrono::Duration::days(days);
+        start = Some(range_start);
+        end = Some(range_end);
+    }
+
+    let year = year.unwrap_or_else(|| {
+        end.as_ref()
+            .map(|d| d.year())
+            .or_else(|| start.as_ref().map(|d| d.year()))
+            .unwrap_or_else(|| Local::now().year())
+    });
     let log_path = log_path.unwrap_or_else(default_log_path);
-    let wrapup = compute_wrapup(&log_path, year, top_n)?;
+    let start_filter = start.clone();
+    let end_filter = end.clone();
+    let mut wrapup = compute_wrapup(
+        &log_path,
+        year,
+        start_filter.clone(),
+        end_filter.clone(),
+        top_n,
+    )?;
+
+    if include_cursor_usage {
+        let (cursor_start, cursor_end) = resolve_cursor_usage_range(
+            year,
+            start_filter,
+            end_filter,
+            wrapup.range_start,
+            wrapup.range_end,
+        )?;
+        let cursor_usage = fetch_cursor_usage(cursor_start, cursor_end)?;
+
+        wrapup.tokens.total_tokens = wrapup
+            .tokens
+            .total_tokens
+            .saturating_add(cursor_usage.total_input_tokens)
+            .saturating_add(cursor_usage.total_output_tokens);
+        wrapup.tokens.prompt_tokens = wrapup
+            .tokens
+            .prompt_tokens
+            .saturating_add(cursor_usage.total_input_tokens);
+        wrapup.tokens.completion_tokens = wrapup
+            .tokens
+            .completion_tokens
+            .saturating_add(cursor_usage.total_output_tokens);
+        wrapup.tokens.cached_input_tokens = wrapup
+            .tokens
+            .cached_input_tokens
+            .saturating_add(cursor_usage.total_cache_read_tokens);
+
+        wrapup.cursor_usage = Some(cursor_usage);
+    }
 
     if let Some(ref html_path) = html_path {
         let html = report::generate_html_report(&wrapup);
         if let Some(dir) = html_path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("create html output dir {:?}", dir))?;
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("create html output dir {:?}", dir))?;
         }
-        let mut file = File::create(&html_path).with_context(|| format!("write {:?}", html_path))?;
+        let mut file =
+            File::create(&html_path).with_context(|| format!("write {:?}", html_path))?;
         file.write_all(html.as_bytes())?;
         println!("Wrote HTML wrapup to {:?}", html_path);
     }
@@ -183,15 +300,43 @@ fn print_help() {
 
 Usage:
   cargo run -p wrapup -- --year 2025
+  cargo run -p wrapup -- --last-days 30
 
 Options:
   --year YYYY     Year filter (default: current year)
+  --start DATE    Range start (YYYY-MM-DD or RFC3339); cannot combine with --year/--last-days
+  --end DATE      Range end (YYYY-MM-DD or RFC3339); cannot combine with --year/--last-days
+  --last-days N   Range end=now, start=now-N days; cannot combine with --year/--start/--end
+  --cursor-usage  Fetch Cursor token usage from Cursor backend API (requires Cursor login; uses local access token)
   --log PATH      Master log path (default: ~/.contrail/logs/master_log.jsonl or $CONTRAIL_LOG_PATH)
   --out PATH      Write JSON output to a file (default: stdout)
   --html PATH     Write HTML report to a file
   --top N         Top-N lists size (default: 10)
 "#
     );
+}
+
+#[derive(Clone, Copy)]
+enum DateBoundary {
+    Start,
+    End,
+}
+
+fn parse_date_arg(input: &str, boundary: DateBoundary) -> Result<DateTime<Utc>> {
+    if let Ok(ts) = DateTime::parse_from_rfc3339(input) {
+        return Ok(ts.with_timezone(&Utc));
+    }
+
+    let date = chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d").context("invalid date")?;
+    let time = match boundary {
+        DateBoundary::Start => chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        DateBoundary::End => chrono::NaiveTime::from_hms_nano_opt(23, 59, 59, 999_999_999).unwrap(),
+    };
+
+    Ok(DateTime::<Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDateTime::new(date, time),
+        Utc,
+    ))
 }
 
 fn default_log_path() -> PathBuf {
@@ -204,7 +349,13 @@ fn default_log_path() -> PathBuf {
     home.join(".contrail/logs/master_log.jsonl")
 }
 
-fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
+fn compute_wrapup(
+    log_path: &Path,
+    year: i32,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    top_n: usize,
+) -> Result<Wrapup> {
     let file = File::open(log_path).with_context(|| format!("open {:?}", log_path))?;
     let reader = BufReader::new(file);
 
@@ -234,7 +385,7 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
     let mut range_end: Option<DateTime<Utc>> = None;
 
     let mut sessions: HashMap<(String, String), SessionAgg> = HashMap::new();
-    
+
     // For session splitting
     let mut last_seen_map: HashMap<(String, String), DateTime<Utc>> = HashMap::new();
     let mut sub_session_index_map: HashMap<(String, String), usize> = HashMap::new();
@@ -246,20 +397,27 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
             Err(_) => continue,
         };
 
-        if log.timestamp.year() != year {
+        if start.is_some() || end.is_some() {
+            if start.is_some_and(|s| log.timestamp < s) {
+                continue;
+            }
+            if end.is_some_and(|e| log.timestamp > e) {
+                continue;
+            }
+        } else if log.timestamp.year() != year {
             continue;
         }
 
         // Determine Effective Session ID (Time-Gap Split)
         let raw_key = (log.source_tool.clone(), log.session_id.clone());
         let last_ts = *last_seen_map.get(&raw_key).unwrap_or(&log.timestamp);
-        
+
         let gap = log.timestamp.signed_duration_since(last_ts);
         if gap > chrono::Duration::minutes(30) {
-             *sub_session_index_map.entry(raw_key.clone()).or_insert(0) += 1;
+            *sub_session_index_map.entry(raw_key.clone()).or_insert(0) += 1;
         }
         last_seen_map.insert(raw_key.clone(), log.timestamp);
-        
+
         let sub_idx = *sub_session_index_map.get(&raw_key).unwrap_or(&0);
         let effective_session_id = if sub_idx > 0 {
             format!("{}#{}", log.session_id, sub_idx)
@@ -298,16 +456,20 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
                 file_effects += arr.len() as u64;
                 for effect in arr {
                     // Try to get path as string or object field
-                    let path_str = effect.as_str()
+                    let path_str = effect
+                        .as_str()
                         .or_else(|| effect.get("path").and_then(Value::as_str));
-                    
+
                     if let Some(path) = path_str {
-                         if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
-                             let ext = ext.to_lowercase();
-                             if !matches!(ext.as_str(), "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock") {
-                                 *language_counts.entry(ext).or_insert(0) += 1;
-                             }
-                         }
+                        if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
+                            let ext = ext.to_lowercase();
+                            if !matches!(
+                                ext.as_str(),
+                                "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock"
+                            ) {
+                                *language_counts.entry(ext).or_insert(0) += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -490,7 +652,7 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         compute_longest_sessions(&sessions);
 
     let tokens = summarize_tokens(&sessions);
-    
+
     // Aggregates
     let total_interrupts = sessions.values().filter(|s| s.interrupted).count() as u64;
 
@@ -525,6 +687,7 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         top_projects_by_sessions,
         top_models,
         tokens,
+        cursor_usage: None,
         redacted_turns,
         redacted_labels,
         clipboard_hits,
@@ -545,6 +708,171 @@ fn compute_wrapup(log_path: &Path, year: i32, top_n: usize) -> Result<Wrapup> {
         total_interrupts,
         languages: top_entries(language_counts, top_n),
     })
+}
+
+fn resolve_cursor_usage_range(
+    year: i32,
+    requested_start: Option<DateTime<Utc>>,
+    requested_end: Option<DateTime<Utc>>,
+    observed_start: Option<DateTime<Utc>>,
+    observed_end: Option<DateTime<Utc>>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    if let (Some(start), Some(end)) = (requested_start, requested_end) {
+        anyhow::ensure!(end >= start, "cursor usage range end must be >= start");
+        return Ok((start, end));
+    }
+
+    if requested_start.is_some() || requested_end.is_some() {
+        anyhow::bail!("--cursor-usage requires both --start and --end (or use --last-days)");
+    }
+
+    if let (Some(start), Some(end)) = (observed_start, observed_end) {
+        anyhow::ensure!(end >= start, "cursor usage range end must be >= start");
+        return Ok((start, end));
+    }
+
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDate::from_ymd_opt(year, 1, 1)
+            .context("invalid year")?
+            .and_hms_opt(0, 0, 0)
+            .unwrap(),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDate::from_ymd_opt(year, 12, 31)
+            .context("invalid year")?
+            .and_hms_nano_opt(23, 59, 59, 999_999_999)
+            .unwrap(),
+        Utc,
+    );
+    Ok((start, end))
+}
+
+#[derive(Debug, Deserialize)]
+struct CursorAggregatedUsageResponse {
+    #[serde(default)]
+    aggregations: Vec<CursorAggregatedModelUsage>,
+    #[serde(default, rename = "totalInputTokens")]
+    total_input_tokens: String,
+    #[serde(default, rename = "totalOutputTokens")]
+    total_output_tokens: String,
+    #[serde(default, rename = "totalCacheWriteTokens")]
+    total_cache_write_tokens: String,
+    #[serde(default, rename = "totalCacheReadTokens")]
+    total_cache_read_tokens: String,
+    #[serde(default, rename = "totalCostCents")]
+    total_cost_cents: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CursorAggregatedModelUsage {
+    #[serde(default, rename = "modelIntent")]
+    model_intent: String,
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<String>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<String>,
+    #[serde(default, rename = "cacheWriteTokens")]
+    cache_write_tokens: Option<String>,
+    #[serde(default, rename = "cacheReadTokens")]
+    cache_read_tokens: Option<String>,
+    #[serde(default, rename = "totalCents")]
+    total_cents: Option<f64>,
+    #[serde(default, rename = "requestCost")]
+    request_cost: Option<f64>,
+    #[serde(default)]
+    tier: Option<u32>,
+}
+
+fn fetch_cursor_usage(start: DateTime<Utc>, end: DateTime<Utc>) -> Result<CursorUsageSummary> {
+    let token = read_cursor_access_token()?;
+    let client = reqwest::blocking::Client::new();
+
+    let resp = client
+        .post("https://api2.cursor.sh/aiserver.v1.DashboardService/GetAggregatedUsageEvents")
+        .bearer_auth(token)
+        .header("Connect-Protocol-Version", "1")
+        .json(&serde_json::json!({
+            "teamId": 0,
+            "startDate": start.timestamp_millis().to_string(),
+            "endDate": end.timestamp_millis().to_string(),
+        }))
+        .send()
+        .context("Cursor usage request failed")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("Cursor usage request failed: HTTP {}", resp.status());
+    }
+
+    let parsed: CursorAggregatedUsageResponse = resp.json().context("parse Cursor usage JSON")?;
+
+    let by_model = parsed
+        .aggregations
+        .into_iter()
+        .map(|m| CursorModelUsage {
+            model_intent: m.model_intent,
+            input_tokens: parse_u64_opt(m.input_tokens),
+            output_tokens: parse_u64_opt(m.output_tokens),
+            cache_write_tokens: parse_u64_opt(m.cache_write_tokens),
+            cache_read_tokens: parse_u64_opt(m.cache_read_tokens),
+            total_cents: m.total_cents,
+            request_cost: m.request_cost,
+            tier: m.tier,
+        })
+        .collect();
+
+    Ok(CursorUsageSummary {
+        team_id: 0,
+        start,
+        end,
+        total_input_tokens: parse_u64(&parsed.total_input_tokens),
+        total_output_tokens: parse_u64(&parsed.total_output_tokens),
+        total_cache_write_tokens: parse_u64(&parsed.total_cache_write_tokens),
+        total_cache_read_tokens: parse_u64(&parsed.total_cache_read_tokens),
+        total_cost_cents: parsed.total_cost_cents,
+        by_model,
+    })
+}
+
+fn read_cursor_access_token() -> Result<String> {
+    let home = dirs::home_dir().context("could not resolve home directory")?;
+    let db_path = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+
+    let conn = rusqlite::Connection::open(&db_path)
+        .with_context(|| format!("open Cursor globalStorage DB: {:?}", db_path))?;
+
+    let mut stmt = conn
+        .prepare("SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'")
+        .context("prepare Cursor access token query")?;
+
+    let token = stmt
+        .query_row([], |row| {
+            use rusqlite::types::ValueRef;
+            let value = row.get_ref(0)?;
+            let data_type = value.data_type();
+            match value {
+                ValueRef::Text(s) => Ok(String::from_utf8_lossy(s).into_owned()),
+                ValueRef::Blob(b) => Ok(String::from_utf8_lossy(b).into_owned()),
+                _ => Err(rusqlite::Error::InvalidColumnType(
+                    0,
+                    "value".to_string(),
+                    data_type,
+                )),
+            }
+        })
+        .context("cursorAuth/accessToken not found (are you logged into Cursor?)")?;
+
+    anyhow::ensure!(!token.trim().is_empty(), "cursorAuth/accessToken was empty");
+
+    Ok(token)
+}
+
+fn parse_u64(s: &str) -> u64 {
+    s.trim().parse::<u64>().unwrap_or(0)
+}
+
+fn parse_u64_opt(s: Option<String>) -> u64 {
+    s.as_deref().map(parse_u64).unwrap_or(0)
 }
 
 fn is_generic_project_context(project_context: &str) -> bool {
@@ -666,7 +994,9 @@ fn summarize_tokens(sessions: &HashMap<(String, String), SessionAgg>) -> TokensS
             reasoning_output += sess.token_cumulative_reasoning_output_max;
         }
         // Per-turn tokens (Claude Code style) - sum them up
-        else if sess.saw_token_per_turn && (sess.token_sum_prompt > 0 || sess.token_sum_completion > 0) {
+        else if sess.saw_token_per_turn
+            && (sess.token_sum_prompt > 0 || sess.token_sum_completion > 0)
+        {
             sessions_with += 1;
             let session_total = sess.token_sum_prompt + sess.token_sum_completion;
             total += session_total;

@@ -26,10 +26,18 @@ Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding
     ```
 3.  **Generate Report**:
     ```bash
-    cargo run -p wrapup -- --year 2025 --html wrapup_2025.html
+    # Rolling last 30 days (includes Cursor token totals via Cursor API)
+    cargo run -p wrapup -- --last-days 30 --cursor-usage --out export/wrapup_last_30d.json --html export/wrapup_last_30d.html
+
+    # Calendar month (example: Dec 2025)
+    cargo run -p wrapup -- --start 2025-12-01 --end 2025-12-31 --cursor-usage --out export/wrapup_2025-12.json --html export/wrapup_2025-12.html
+
+    # Full year (Codex/Claude/Antigravity from local logs; Cursor usage uses Cursor API over the same observed date range)
+    cargo run -p wrapup -- --year 2025 --cursor-usage --out export/wrapup_2025.json --html export/wrapup_2025.html
     ```
-    *   Opens a vibrant HTML dashboard (`wrapup_2025.html`).
+    *   Opens a vibrant HTML dashboard (e.g. `export/wrapup_last_30d.html`).
     *   Download your "Vibrant Bento" share card directly from the UI.
+    *   `--cursor-usage` is optional. Cursor’s local workspace DB does not expose token counts, so totals come from Cursor’s backend usage API (requires that you’re logged into Cursor on this machine).
 
 ## 🚀 Installation
 
@@ -178,7 +186,8 @@ Contrail automatically watches standard paths. Ensure your tools are installed i
 
 ## 🛡️ Security
 
-*   **Local Only:** No data is sent to the cloud.
+*   **Local Only (by default):** Capture + analysis read/write only local files.  
+    *Exception:* `wrapup --cursor-usage` calls Cursor’s backend usage API to fetch token totals (still no upload of your local Contrail logs).
 *   **Redaction:** Basic patterns (like `sk-...`) are redacted from logs automatically.
 
 ## 🤝 Contributing

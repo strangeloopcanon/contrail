@@ -1,4 +1,5 @@
 use crate::Wrapup;
+use chrono::Datelike;
 
 const STYLE: &str = r#"
         :root {
@@ -346,26 +347,49 @@ const SCRIPTS_TEMPLATE: &str = r#"
 
 pub fn generate_html_report(wrapup: &Wrapup) -> String {
     let json_data = serde_json::to_string(&wrapup).unwrap_or_else(|_| "{}".to_string());
-    
+
     // Determine personality
     let personality = determine_personality(wrapup);
-    let badges = determine_badges(wrapup);
+    let _badges = determine_badges(wrapup);
     let scripts = SCRIPTS_TEMPLATE.replace("JSON_DATA_PLACEHOLDER", &json_data);
 
-    let marathon_duration = wrapup.longest_session_by_duration.as_ref().map(|s| s.duration_seconds / 60).unwrap_or(0);
+    let marathon_duration = wrapup
+        .longest_session_by_duration
+        .as_ref()
+        .map(|s| s.duration_seconds / 60)
+        .unwrap_or(0);
     let marathon_hrs = marathon_duration / 60;
     let marathon_mins = marathon_duration % 60;
-    let marathon_str = if marathon_hrs > 0 { format!("{}h {}m", marathon_hrs, marathon_mins) } else { format!("{}m", marathon_mins) };
+    let marathon_str = if marathon_hrs > 0 {
+        format!("{}h {}m", marathon_hrs, marathon_mins)
+    } else {
+        format!("{}m", marathon_mins)
+    };
 
-    let top_lang = wrapup.languages.first().map(|x| x.key.as_str()).unwrap_or("None");
+    let top_lang = wrapup
+        .languages
+        .first()
+        .map(|x| x.key.as_str())
+        .unwrap_or("None");
+
+    let snapshot_period = format_snapshot_period(wrapup);
+    let snapshot_heading = format!("Your {} Snapshot", snapshot_period);
+
+    let cursor_tokens_total = wrapup
+        .cursor_usage
+        .as_ref()
+        .map(|c| c.total_input_tokens.saturating_add(c.total_output_tokens));
+    let cursor_tokens_str = cursor_tokens_total
+        .map(format_compact_tokens)
+        .unwrap_or_else(|| "N/A".to_string());
 
     format!(
-r#"<!DOCTYPE html>
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Year in Review {}</title>
+    <title>Contrail Wrapup {}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
@@ -376,20 +400,20 @@ r#"<!DOCTYPE html>
 <div class="container">
     <header>
         <div style="color: var(--text-secondary)">CONTRAIL TELEMETRY</div>
-        <h1>AI Year in Review {}</h1>
+        <h1>Contrail Wrapup {}</h1>
         <div style="color: var(--text-secondary)">{} to {}</div>
     </header>
     
     <!-- Shareable Card Section -->
     <div class="share-section">
-        <h2 style="margin-bottom: 20px;">Your 2025 Snapshot</h2>
+        <h2 style="margin-bottom: 20px;">{}</h2>
         <div id="capture-card" class="share-card">
             <div class="share-header">
                 <div class="share-title">
-                    <span>My Year In Code</span>
+                    <span>My AI Snapshot</span>
                     <h2>{}</h2> 
                 </div>
-                <div style="font-size: 1.5rem; font-weight: 700;">2025</div>
+                <div style="font-size: 1.5rem; font-weight: 700;">{}</div>
             </div>
             
             <div class="share-body">
@@ -456,6 +480,11 @@ r#"<!DOCTYPE html>
             <div class="metric-value">{}</div>
             <div style="font-size: 0.9em; color: var(--text-secondary);">Most edited file type</div>
         </div>
+        <div class="card">
+            <div style="color: var(--text-secondary); text-transform: uppercase; font-size: 0.875rem;">Cursor Tokens</div>
+            <div class="metric-value">{}</div>
+            <div style="font-size: 0.9em; color: var(--text-secondary);">Input + output (Cursor API)</div>
+        </div>
     </div>
 
     <!-- Charts Row 1 -->
@@ -492,38 +521,86 @@ r#"<!DOCTYPE html>
 </html>
 "#,
         // Title
-        wrapup.year,
+        snapshot_period,
         // Style
         STYLE,
-        
         // Header
-        wrapup.year,
-        wrapup.range_start.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
-        wrapup.range_end.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
-        
+        snapshot_period,
+        wrapup
+            .range_start
+            .map(|d| d.format("%b %d, %Y").to_string())
+            .unwrap_or_default(),
+        wrapup
+            .range_end
+            .map(|d| d.format("%b %d, %Y").to_string())
+            .unwrap_or_default(),
+        // Share section heading
+        snapshot_heading,
         // SHARE HEADER: Personality Name
-        personality.0, 
-
+        personality.0,
+        // Share header right-side period label
+        snapshot_period,
         // METRICS GRID (6 TILES)
         wrapup.turns_total as f64 / 1000.0, // Prompts K
         wrapup.tokens.total_tokens as f64 / 1_000_000_000.0, // Tokens B
-        wrapup.longest_streak_days,        // Streak
+        wrapup.longest_streak_days,         // Streak
         wrapup.user_question_rate.unwrap_or(0.0), // Question Rate
-        wrapup.total_interrupts, // Interrupts
+        wrapup.total_interrupts,            // Interrupts
         wrapup.user_avg_words.unwrap_or(0.0), // Avg Words
-
         // Footer Date
         chrono::Local::now().format("%b %d, %Y"),
-
         // Bottom Cards
         personality.0,
         personality.1,
         marathon_str,
         top_lang,
-
+        cursor_tokens_str,
         // Scripts
         scripts
     )
+}
+
+fn format_snapshot_period(wrapup: &Wrapup) -> String {
+    let Some(start) = wrapup.range_start else {
+        return wrapup.year.to_string();
+    };
+    let Some(end) = wrapup.range_end else {
+        return wrapup.year.to_string();
+    };
+
+    if start.year() == end.year() && start.month() == end.month() {
+        return format!("{} {}", start.format("%b"), start.year());
+    }
+
+    if start.year() == end.year() {
+        return format!(
+            "{}–{} {}",
+            start.format("%b"),
+            end.format("%b"),
+            start.year()
+        );
+    }
+
+    format!(
+        "{} {}–{} {}",
+        start.format("%b"),
+        start.year(),
+        end.format("%b"),
+        end.year()
+    )
+}
+
+fn format_compact_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000_000 {
+        return format!("{:.1}B", tokens as f64 / 1_000_000_000.0);
+    }
+    if tokens >= 1_000_000 {
+        return format!("{:.1}M", tokens as f64 / 1_000_000.0);
+    }
+    if tokens >= 1_000 {
+        return format!("{:.1}K", tokens as f64 / 1_000.0);
+    }
+    tokens.to_string()
 }
 
 fn determine_personality(wrapup: &Wrapup) -> (&'static str, &'static str) {
@@ -533,35 +610,56 @@ fn determine_personality(wrapup: &Wrapup) -> (&'static str, &'static str) {
     let total_turns = wrapup.turns_total;
 
     if total_turns < 50 {
-        return ("The Tourist", "You're just passing through, exploring what AI can do.");
+        return (
+            "The Tourist",
+            "You're just passing through, exploring what AI can do.",
+        );
     }
 
     if code_rate > 30.0 {
-        return ("The Collaborator", "You treat AI as a true pair programmer, often pasting your own code for review.");
+        return (
+            "The Collaborator",
+            "You treat AI as a true pair programmer, often pasting your own code for review.",
+        );
     }
 
     if q_rate > 40.0 {
-        return ("The Interrogator", "You relentlessly question the AI until it yields the truth.");
+        return (
+            "The Interrogator",
+            "You relentlessly question the AI until it yields the truth.",
+        );
     }
 
     if avg_len > 50.0 {
-        return ("The Novelist", "Your prompts are detailed, rich stories. You leave nothing to chance.");
+        return (
+            "The Novelist",
+            "Your prompts are detailed, rich stories. You leave nothing to chance.",
+        );
     }
 
     if avg_len < 10.0 {
-        return ("The Minimalist", "Short, punchy prompts. You expect the AI to read your mind.");
+        return (
+            "The Minimalist",
+            "Short, punchy prompts. You expect the AI to read your mind.",
+        );
     }
 
     if wrapup.antigravity_images > 20 {
-        return ("The Voyager", "You use Antigravity to explore new dimensions of code.");
+        return (
+            "The Voyager",
+            "You use Antigravity to explore new dimensions of code.",
+        );
     }
 
-    ("The Architect", "Balanced, focused, and building something great.")
+    (
+        "The Architect",
+        "Balanced, focused, and building something great.",
+    )
 }
 
 fn determine_badges(wrapup: &Wrapup) -> String {
     let mut badges = Vec::new();
-    
+
     if wrapup.longest_streak_days > 7 {
         badges.push(format!("🔥 {}-Day Streak", wrapup.longest_streak_days));
     }
@@ -582,5 +680,9 @@ fn determine_badges(wrapup: &Wrapup) -> String {
         badges.push("🚀 Ship It".to_string());
     }
 
-    badges.into_iter().map(|b| format!("<div class=\"badge\">{}</div>", b)).collect::<Vec<_>>().join("\n")
+    badges
+        .into_iter()
+        .map(|b| format!("<div class=\"badge\">{}</div>", b))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
