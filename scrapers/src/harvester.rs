@@ -586,7 +586,10 @@ impl Harvester {
         let claude_projects = self.config.claude_projects.clone();
 
         if !claude_projects.exists() {
-            println!("Claude projects directory not found at {:?}", claude_projects);
+            println!(
+                "Claude projects directory not found at {:?}",
+                claude_projects
+            );
             return Ok(());
         }
 
@@ -620,7 +623,8 @@ impl Harvester {
                             // Read new content
                             if let Ok(file) = fs::File::open(&session_path) {
                                 let mut reader = BufReader::new(file);
-                                let current_len = reader.get_ref().metadata().map(|m| m.len()).unwrap_or(0);
+                                let current_len =
+                                    reader.get_ref().metadata().map(|m| m.len()).unwrap_or(0);
 
                                 if current_len < *pos {
                                     // File truncated/rotated
@@ -642,10 +646,8 @@ impl Harvester {
                                                 .clone()
                                                 .unwrap_or_else(|| "Claude Session".to_string());
 
-                                            let session_id = parsed
-                                                .session_id
-                                                .clone()
-                                                .unwrap_or_else(|| {
+                                            let session_id =
+                                                parsed.session_id.clone().unwrap_or_else(|| {
                                                     session_path
                                                         .file_stem()
                                                         .and_then(|s| s.to_str())

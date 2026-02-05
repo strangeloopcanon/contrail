@@ -90,7 +90,7 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
 
     // Session files have a "type" field: "user", "assistant", or "file-history-snapshot"
     let msg_type = json.get("type").and_then(Value::as_str)?;
-    
+
     // Skip file-history-snapshot entries - they don't contain conversation data
     if msg_type == "file-history-snapshot" {
         return None;
@@ -98,8 +98,7 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
 
     // Check if this is a real user message vs tool result
     // Real user messages have "userType": "external", tool results don't
-    let is_external_user = json.get("userType")
-        .and_then(Value::as_str) == Some("external");
+    let is_external_user = json.get("userType").and_then(Value::as_str) == Some("external");
 
     // Tool results have role="user" but no userType="external"
     // Mark them distinctly so wrapup can filter them out
@@ -119,7 +118,10 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
     }
 
     // Extract project context from cwd
-    let project_context = json.get("cwd").and_then(Value::as_str).map(|s| s.to_string());
+    let project_context = json
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
     if let Some(cwd) = project_context.as_ref() {
         metadata.insert("cwd".to_string(), Value::String(cwd.clone()));
     }
@@ -152,7 +154,7 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
 
     // Extract content from message.content array
     let content = extract_message_content(&json).unwrap_or_default();
-    
+
     // Skip empty content
     if content.trim().is_empty() {
         return None;
@@ -171,14 +173,15 @@ pub fn parse_claude_session_line(raw: &str) -> Option<ParsedLine> {
 /// Extract text content from Claude session message.content array
 fn extract_message_content(json: &Value) -> Option<String> {
     let content_array = json.pointer("/message/content")?.as_array()?;
-    
+
     let mut texts = Vec::new();
     for item in content_array {
         if let Some(text) = item.get("text").and_then(Value::as_str) {
             // Truncate very long text content
             let truncated = if text.len() > 2000 {
                 // Find the nearest character boundary to avoid panicking on multi-byte UTF-8
-                let boundary = text.char_indices()
+                let boundary = text
+                    .char_indices()
                     .take_while(|(i, _)| *i < 2000)
                     .last()
                     .map(|(i, c)| i + c.len_utf8())
@@ -196,7 +199,7 @@ fn extract_message_content(json: &Value) -> Option<String> {
             texts.push("[tool_result]".to_string());
         }
     }
-    
+
     if texts.is_empty() {
         None
     } else {
@@ -214,9 +217,8 @@ fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
                 "prompt" | "prompt_tokens" | "promptTokens" | "input" | "input_tokens" => {
                     insert_scalar(meta, "usage_prompt_tokens", v)
                 }
-                "completion" | "completion_tokens" | "completionTokens" | "output" | "output_tokens" => {
-                    insert_scalar(meta, "usage_completion_tokens", v)
-                }
+                "completion" | "completion_tokens" | "completionTokens" | "output"
+                | "output_tokens" => insert_scalar(meta, "usage_completion_tokens", v),
                 "cache_read_input_tokens" | "cached_tokens" => {
                     insert_scalar(meta, "usage_cached_input_tokens", v)
                 }
