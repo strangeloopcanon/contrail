@@ -369,7 +369,9 @@ fn import_claude_projects_root(
                 continue;
             }
 
-            if let Err(e) = import_claude_session_file(&session_path, writer, sentry, existing, stats) {
+            if let Err(e) =
+                import_claude_session_file(&session_path, writer, sentry, existing, stats)
+            {
                 eprintln!("import claude session file failed: {:?}: {e}", session_path);
                 stats.errors += 1;
             }
@@ -386,7 +388,8 @@ fn import_claude_session_file(
     existing: &mut HashSet<u64>,
     stats: &mut ImportStats,
 ) -> Result<()> {
-    let file = fs::File::open(path).with_context(|| format!("open claude session file {path:?}"))?;
+    let file =
+        fs::File::open(path).with_context(|| format!("open claude session file {path:?}"))?;
     let reader = BufReader::new(file);
 
     let default_session_id = path
@@ -412,8 +415,12 @@ fn import_claude_session_file(
         let mut metadata = parsed.metadata;
         metadata.insert("imported".to_string(), Value::Bool(true));
 
-        let session_id = parsed.session_id.unwrap_or_else(|| default_session_id.clone());
-        let project_context = parsed.project_context.unwrap_or_else(|| "Claude Session".to_string());
+        let session_id = parsed
+            .session_id
+            .unwrap_or_else(|| default_session_id.clone());
+        let project_context = parsed
+            .project_context
+            .unwrap_or_else(|| "Claude Session".to_string());
 
         let (content, flags) = sentry.scan_and_redact(&parsed.content);
 

@@ -225,15 +225,9 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| Local::now().year())
     });
     let log_path = log_path.unwrap_or_else(default_log_path);
-    let start_filter = start.clone();
-    let end_filter = end.clone();
-    let mut wrapup = compute_wrapup(
-        &log_path,
-        year,
-        start_filter.clone(),
-        end_filter.clone(),
-        top_n,
-    )?;
+    let start_filter = start;
+    let end_filter = end;
+    let mut wrapup = compute_wrapup(&log_path, year, start_filter, end_filter, top_n)?;
 
     if include_cursor_usage {
         let (cursor_start, cursor_end) = resolve_cursor_usage_range(
@@ -272,8 +266,7 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("create html output dir {:?}", dir))?;
         }
-        let mut file =
-            File::create(&html_path).with_context(|| format!("write {:?}", html_path))?;
+        let mut file = File::create(html_path).with_context(|| format!("write {:?}", html_path))?;
         file.write_all(html.as_bytes())?;
         println!("Wrote HTML wrapup to {:?}", html_path);
     }
@@ -340,10 +333,10 @@ fn parse_date_arg(input: &str, boundary: DateBoundary) -> Result<DateTime<Utc>> 
 }
 
 fn default_log_path() -> PathBuf {
-    if let Ok(path) = std::env::var("CONTRAIL_LOG_PATH") {
-        if !path.trim().is_empty() {
-            return PathBuf::from(path);
-        }
+    if let Ok(path) = std::env::var("CONTRAIL_LOG_PATH")
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
     }
     let home = dirs::home_dir().expect("Could not find home directory");
     home.join(".contrail/logs/master_log.jsonl")
@@ -460,15 +453,15 @@ fn compute_wrapup(
                         .as_str()
                         .or_else(|| effect.get("path").and_then(Value::as_str));
 
-                    if let Some(path) = path_str {
-                        if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
-                            let ext = ext.to_lowercase();
-                            if !matches!(
-                                ext.as_str(),
-                                "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock"
-                            ) {
-                                *language_counts.entry(ext).or_insert(0) += 1;
-                            }
+                    if let Some(path) = path_str
+                        && let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str())
+                    {
+                        let ext = ext.to_lowercase();
+                        if !matches!(
+                            ext.as_str(),
+                            "json" | "md" | "txt" | "csv" | "png" | "jpg" | "lock"
+                        ) {
+                            *language_counts.entry(ext).or_insert(0) += 1;
                         }
                     }
                 }
@@ -493,8 +486,8 @@ fn compute_wrapup(
                 }
             }
 
-            if log.source_tool == "antigravity" {
-                if let Some(n) = obj
+            if log.source_tool == "antigravity"
+                && let Some(n) = obj
                     .get("antigravity_image_count")
                     .and_then(Value::as_u64)
                     .or_else(|| {
@@ -502,9 +495,8 @@ fn compute_wrapup(
                             .and_then(Value::as_i64)
                             .and_then(|v| u64::try_from(v).ok())
                     })
-                {
-                    antigravity_images = antigravity_images.saturating_add(n);
-                }
+            {
+                antigravity_images = antigravity_images.saturating_add(n);
             }
         }
 
@@ -568,36 +560,37 @@ fn compute_wrapup(
         }
 
         // Token_count events in Codex logs may be stored as raw JSON content.
-        if log.source_tool == "codex-cli" && log.interaction.content.contains("\"token_count\"") {
-            if let Some(usage) = extract_token_count_from_content(&log.interaction.content) {
-                sess.saw_token_cumulative = true;
-                sess.token_cumulative_total_max = sess.token_cumulative_total_max.max(usage.total);
-                sess.token_cumulative_prompt_max =
-                    sess.token_cumulative_prompt_max.max(usage.prompt);
-                sess.token_cumulative_completion_max =
-                    sess.token_cumulative_completion_max.max(usage.completion);
-                sess.token_cumulative_cached_input_max = sess
-                    .token_cumulative_cached_input_max
-                    .max(usage.cached_input);
-                sess.token_cumulative_reasoning_output_max = sess
-                    .token_cumulative_reasoning_output_max
-                    .max(usage.reasoning_output);
-            }
+        if log.source_tool == "codex-cli"
+            && log.interaction.content.contains("\"token_count\"")
+            && let Some(usage) = extract_token_count_from_content(&log.interaction.content)
+        {
+            sess.saw_token_cumulative = true;
+            sess.token_cumulative_total_max = sess.token_cumulative_total_max.max(usage.total);
+            sess.token_cumulative_prompt_max = sess.token_cumulative_prompt_max.max(usage.prompt);
+            sess.token_cumulative_completion_max =
+                sess.token_cumulative_completion_max.max(usage.completion);
+            sess.token_cumulative_cached_input_max = sess
+                .token_cumulative_cached_input_max
+                .max(usage.cached_input);
+            sess.token_cumulative_reasoning_output_max = sess
+                .token_cumulative_reasoning_output_max
+                .max(usage.reasoning_output);
         }
 
         // Count Codex function calls + apply_patch calls for “fascinating” stats.
-        if log.source_tool == "codex-cli" && log.interaction.content.contains("\"type\"") {
-            if let Ok(value) = serde_json::from_str::<Value>(&log.interaction.content) {
-                if value.get("type").and_then(Value::as_str) == Some("function_call_output") {
-                    function_call_outputs += 1;
-                }
-                if value.get("type").and_then(Value::as_str) == Some("function_call") {
-                    function_calls += 1;
-                    if let Some(args) = value.get("arguments").and_then(Value::as_str) {
-                        if args.contains("apply_patch") {
-                            apply_patch_calls += 1;
-                        }
-                    }
+        if log.source_tool == "codex-cli"
+            && log.interaction.content.contains("\"type\"")
+            && let Ok(value) = serde_json::from_str::<Value>(&log.interaction.content)
+        {
+            if value.get("type").and_then(Value::as_str) == Some("function_call_output") {
+                function_call_outputs += 1;
+            }
+            if value.get("type").and_then(Value::as_str) == Some("function_call") {
+                function_calls += 1;
+                if let Some(args) = value.get("arguments").and_then(Value::as_str)
+                    && args.contains("apply_patch")
+                {
+                    apply_patch_calls += 1;
                 }
             }
         }
