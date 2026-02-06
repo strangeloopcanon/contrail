@@ -7,6 +7,7 @@ pub struct ParsedLine {
     pub role: String,
     pub content: String,
     pub timestamp: Option<DateTime<Utc>>,
+    pub session_id: Option<String>,
     pub project_context: Option<String>,
     pub metadata: Map<String, Value>,
 }
@@ -14,28 +15,62 @@ pub struct ParsedLine {
 pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
     let json = serde_json::from_str::<Value>(raw).ok()?;
     let mut metadata = Map::new();
+    let session_id = extract_session_id(&json);
+
+    if let Some(id) = session_id.as_ref() {
+        metadata.insert("conversation_id".to_string(), Value::String(id.clone()));
+    }
 
     let _ = append_token_count_usage(&mut metadata, &json);
 
     let project_context = json
         .pointer("/payload/cwd")
         .or_else(|| json.pointer("/turn_context/cwd"))
+        .or_else(|| json.pointer("/payload/turn_context/cwd"))
         .or_else(|| json.pointer("/cwd"))
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
     if let Some(cwd) = project_context.as_ref() {
         metadata.insert("cwd".to_string(), Value::String(cwd.clone()));
     }
 
-    if let Some(model) = json.pointer("/payload/model").and_then(Value::as_str) {
-        metadata.insert("model".to_string(), Value::String(model.to_string()));
-    }
+    insert_string_from_pointers(
+        &mut metadata,
+        "model",
+        &json,
+        &[
+            "/payload/model",
+            "/turn_context/model",
+            "/payload/turn_context/model",
+        ],
+    );
+    insert_string_from_pointers(
+        &mut metadata,
+        "codex_source",
+        &json,
+        &["/payload/source", "/source"],
+    );
+    insert_string_from_pointers(
+        &mut metadata,
+        "codex_originator",
+        &json,
+        &["/payload/originator", "/originator"],
+    );
+    append_git_metadata(&mut metadata, &json);
 
     if let Some(info) = json.pointer("/payload/info") {
         append_usage(&mut metadata, info);
     }
+    if let Some(info) = json.pointer("/info") {
+        append_usage(&mut metadata, info);
+    }
     if let Some(usage) = json.pointer("/payload/usage") {
+        append_usage(&mut metadata, usage);
+    }
+    if let Some(usage) = json.pointer("/usage") {
         append_usage(&mut metadata, usage);
     }
     if let Some(metrics) = json.pointer("/payload/metrics") {
@@ -71,12 +106,16 @@ pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
     let content_value = json
         .pointer("/interaction/content")
         .or_else(|| json.pointer("/payload/message/content"))
+        .or_else(|| json.pointer("/payload/message"))
         .or_else(|| json.pointer("/payload/content"))
+        .or_else(|| json.pointer("/payload/input"))
+        .or_else(|| json.pointer("/payload/text"))
         .or_else(|| json.pointer("/message/content"))
         .or_else(|| json.get("content"));
 
     let content = content_value
         .and_then(extract_text)
+        .or_else(|| fallback_content(&json))
         .unwrap_or_else(|| raw.to_string());
 
     if content.trim().is_empty() {
@@ -87,6 +126,7 @@ pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
         role,
         content,
         timestamp,
+        session_id,
         project_context,
         metadata,
     })
@@ -106,7 +146,107 @@ fn derive_role_override(json: &Value) -> Option<String> {
             return Some("system".to_string());
         }
     }
+    if record_type.eq_ignore_ascii_case("session_meta")
+        || record_type.eq_ignore_ascii_case("turn_context")
+    {
+        return Some("system".to_string());
+    }
     None
+}
+
+fn fallback_content(json: &Value) -> Option<String> {
+    let record_type = json.get("type").and_then(Value::as_str)?;
+    if record_type.eq_ignore_ascii_case("session_meta") {
+        return Some("Codex session metadata".to_string());
+    }
+    if record_type.eq_ignore_ascii_case("turn_context") {
+        return Some("Codex turn context".to_string());
+    }
+    None
+}
+
+fn extract_session_id(json: &Value) -> Option<String> {
+    for ptr in [
+        "/payload/id",
+        "/id",
+        "/payload/conversation_id",
+        "/conversation_id",
+        "/payload/conversationId",
+        "/conversationId",
+        "/payload/session_id",
+        "/session_id",
+        "/payload/sessionId",
+        "/sessionId",
+    ] {
+        if let Some(value) = json.pointer(ptr).and_then(Value::as_str) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn insert_string_from_pointers(
+    meta: &mut Map<String, Value>,
+    key: &str,
+    json: &Value,
+    pointers: &[&str],
+) {
+    for ptr in pointers {
+        if let Some(value) = json.pointer(ptr).and_then(Value::as_str) {
+            let value = value.trim();
+            if !value.is_empty() {
+                meta.insert(key.to_string(), Value::String(value.to_string()));
+                return;
+            }
+        }
+    }
+}
+
+fn append_git_metadata(meta: &mut Map<String, Value>, json: &Value) {
+    insert_string_from_pointers(
+        meta,
+        "git_branch",
+        json,
+        &[
+            "/payload/git/branch",
+            "/git/branch",
+            "/payload/gitBranch",
+            "/gitBranch",
+        ],
+    );
+    insert_string_from_pointers(
+        meta,
+        "git_repository_url",
+        json,
+        &[
+            "/payload/git/repository_url",
+            "/git/repository_url",
+            "/payload/git/repositoryUrl",
+            "/git/repositoryUrl",
+            "/payload/repository_url",
+            "/repository_url",
+            "/payload/repositoryUrl",
+            "/repositoryUrl",
+        ],
+    );
+    insert_string_from_pointers(
+        meta,
+        "git_commit_hash",
+        json,
+        &[
+            "/payload/git/commit_hash",
+            "/git/commit_hash",
+            "/payload/git/commitHash",
+            "/git/commitHash",
+            "/payload/git/commit",
+            "/git/commit",
+            "/payload/commit_hash",
+            "/commit_hash",
+        ],
+    );
 }
 
 fn append_token_count_usage(meta: &mut Map<String, Value>, json: &Value) -> Option<String> {
@@ -297,6 +437,7 @@ mod tests {
         let parsed = parse_codex_line(raw).expect("should parse");
         assert_eq!(parsed.role, "assistant");
         assert_eq!(parsed.content, "hello");
+        assert_eq!(parsed.session_id, None);
         assert_eq!(parsed.project_context.as_deref(), Some("/tmp/project"));
         assert!(parsed.timestamp.is_some());
         assert_eq!(
@@ -325,7 +466,7 @@ mod tests {
 
         let parsed = parse_codex_line(raw).expect("should parse");
         assert_eq!(parsed.role, "user");
-        assert!(parsed.content.contains("\"user_message\""));
+        assert_eq!(parsed.content, "hello from user");
     }
 
     #[test]
@@ -366,6 +507,73 @@ mod tests {
                 .get("model_context_window")
                 .and_then(Value::as_i64),
             Some(258400)
+        );
+    }
+
+    #[test]
+    fn parses_codex_desktop_session_meta_with_repo_context() {
+        let raw = r#"{
+            "timestamp": "2026-02-05T23:11:38.000Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "019c31ca-c7b9-73d2-8707-61eb9ae9e0c1",
+                "source": "vscode",
+                "originator": "Codex Desktop",
+                "cwd": "/Users/test/work/repo",
+                "git": {
+                    "branch": "feat/codex-app-ingest",
+                    "repository_url": "https://github.com/acme/repo.git",
+                    "commit_hash": "c6107e61d8dba4b59ac3e3d0fee4f45259b047f3"
+                }
+            }
+        }"#;
+
+        let parsed = parse_codex_line(raw).expect("should parse");
+        assert_eq!(parsed.role, "system");
+        assert_eq!(parsed.content, "Codex session metadata");
+        assert_eq!(
+            parsed.session_id.as_deref(),
+            Some("019c31ca-c7b9-73d2-8707-61eb9ae9e0c1")
+        );
+        assert_eq!(
+            parsed.project_context.as_deref(),
+            Some("/Users/test/work/repo")
+        );
+        assert_eq!(
+            parsed.metadata.get("codex_source").and_then(Value::as_str),
+            Some("vscode")
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("codex_originator")
+                .and_then(Value::as_str),
+            Some("Codex Desktop")
+        );
+        assert_eq!(
+            parsed.metadata.get("git_branch").and_then(Value::as_str),
+            Some("feat/codex-app-ingest")
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("git_repository_url")
+                .and_then(Value::as_str),
+            Some("https://github.com/acme/repo.git")
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("git_commit_hash")
+                .and_then(Value::as_str),
+            Some("c6107e61d8dba4b59ac3e3d0fee4f45259b047f3")
+        );
+        assert_eq!(
+            parsed
+                .metadata
+                .get("conversation_id")
+                .and_then(Value::as_str),
+            Some("019c31ca-c7b9-73d2-8707-61eb9ae9e0c1")
         );
     }
 }

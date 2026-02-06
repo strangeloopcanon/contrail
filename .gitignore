@@ -23,6 +23,11 @@ coverage/
 *.log
 *.tmp
 
+# Generated wrapup reports (local artifacts)
+export/wrapup_*.html
+export/wrapup_*.json
+!export/wrapup_2025.json
+
 # Secrets and local overrides
 .env
 .env.*

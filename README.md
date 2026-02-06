@@ -5,12 +5,12 @@ Contrail is a local-first background service that acts as a "Flight Recorder" fo
 
 ## 🌟 Features
 
-*   **Universal Capture:** Monitors **Cursor**, **OpenAI Codex CLI**, **Claude Code**, and **Antigravity**.
+*   **Universal Capture:** Monitors **Cursor**, **OpenAI Codex CLI/Desktop sessions**, **Claude Code**, and **Antigravity**.
 *   **Blackbox Telemetry:**
     *   **File Effects:** Automatically runs `git status` after every session to link AI advice to actual code changes.
     *   **Interruption Detection:** Detects if an AI session was cut short or crashed.
     *   **Clipboard Monitor:** Flags if AI-generated code was copied to the system clipboard (potential leak detection).
-    *   **Git Context:** Logs the active branch and project folder for every interaction.
+    *   **Git Context:** Logs branch/repo/folder context (when available) for every interaction.
 *   **Privacy First:** All data is stored locally in `~/.contrail/logs/master_log.jsonl`.
 *   **DLP (Data Loss Prevention):** Basic regex-based redaction for secrets (API keys) before logging.
 
@@ -47,7 +47,7 @@ Generate a beautiful, shareable "Spotify Wrapped" style report of your AI coding
 *   **Git**
 *   AI tools at their default locations:
     * Cursor: `~/Library/Application Support/Cursor/User/workspaceStorage`
-    * Codex CLI: `~/.codex/sessions`
+    * Codex CLI/Desktop sessions: `~/.codex/sessions`
     * Claude Code: `~/.claude/history.jsonl`
     * Antigravity: `~/.gemini/antigravity/brain`
 
@@ -92,7 +92,7 @@ cargo build --release
 ```bash
 cargo run -p core_daemon
 ```
-On the first run, `core_daemon` will backfill historical Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (DLP + schema validation + dedupe), then switch to live capture.  
+On the first run, `core_daemon` will backfill historical Codex (CLI/Desktop)/Claude logs into `~/.contrail/logs/master_log.jsonl` (DLP + schema validation + dedupe), then switch to live capture.  
 To re-run the one-time backfill, delete `~/.contrail/state/history_import_done.json` and restart the daemon.
 
 3) View the dashboard (live tail):
@@ -108,7 +108,7 @@ To restart later, just run steps 2–3 as needed (skip rebuild unless deps chang
 1. **Live capture:** `cargo run -p core_daemon` (writes to `~/.contrail/logs/master_log.jsonl`).  
 2. **View dashboard:** `cargo run -p dashboard` then open `http://127.0.0.1:3000`.  
 3. **Analyze (local ADE):** `cargo run -p analysis` then open `http://127.0.0.1:3210/` (optional GPT features need `OPENAI_API_KEY` or a key file at `~/.config/openai/api_key`).  
-4. **Historical backfill (optional/manual):** `cargo run -p importer` to pull past Codex/Claude history into the master log (the daemon also does a one-time backfill on first run).
+4. **Historical backfill (optional/manual):** `cargo run -p importer` to pull past Codex (CLI/Desktop)/Claude history into the master log (the daemon also does a one-time backfill on first run).
 
 ### Export a curated dataset (seed for fine-tuning)
 
@@ -137,9 +137,11 @@ Use the exported file as your starting point for fine-tuning or further filterin
     "content": "Here is the fix for your bug..."
   },
   "metadata": {
+    "conversation_id": "019c31ca-c7b9-73d2-8707-61eb9ae9e0c1",
     "user": "rohit",
     "hostname": "MacBook-Pro",
     "git_branch": "feature/login",
+    "git_repository_url": "https://github.com/example/repo.git",
     "file_effects": ["M src/main.rs"],
     "copied_to_clipboard": true
   }
@@ -172,7 +174,7 @@ Endpoints:
 - **Capture live:** `cargo run -p core_daemon` to tail active sessions (writes `~/.contrail/logs/master_log.jsonl`; does a one-time historical backfill on first run).
 - **Analyze/browse:** `cargo run -p analysis` then open `http://127.0.0.1:3210/` for sessions, probes, context packs, and memories.
 - **(Optional) Live UI:** `cargo run -p dashboard` at `http://127.0.0.1:3000`.
-- **(Optional/manual) Historical backfill:** `cargo run -p importer` to append past Codex/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
+- **(Optional/manual) Historical backfill:** `cargo run -p importer` to append past Codex (CLI/Desktop)/Claude logs into `~/.contrail/logs/master_log.jsonl` (runs DLP/redaction on ingest).
 
 
 ## 🔧 Supported Tools Configuration
@@ -180,7 +182,7 @@ Endpoints:
 Contrail automatically watches standard paths. Ensure your tools are installed in their default locations:
 
 *   **Cursor:** `~/Library/Application Support/Cursor/User/workspaceStorage`
-*   **Codex CLI:** `~/.codex/sessions`
+*   **Codex CLI/Desktop sessions:** `~/.codex/sessions`
 *   **Claude Code:** `~/.claude/history.jsonl`
 *   **Antigravity:** `~/.gemini/antigravity/brain`
 
