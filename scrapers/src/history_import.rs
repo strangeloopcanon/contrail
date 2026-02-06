@@ -131,11 +131,12 @@ fn import_codex_file(
     let file = fs::File::open(path).with_context(|| format!("open codex file {path:?}"))?;
     let reader = BufReader::new(file);
 
-    let session_id = path
+    let default_session_id = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string();
+    let mut session_id = default_session_id.clone();
 
     let mut session_start_ts: Option<DateTime<Utc>> = None;
     let mut last_ts: Option<DateTime<Utc>> = None;
@@ -153,6 +154,9 @@ fn import_codex_file(
 
         let parsed_json = serde_json::from_str::<Value>(&line).ok();
         if let Some(value) = parsed_json.as_ref() {
+            if let Some(id) = extract_codex_session_id(value) {
+                session_id = id;
+            }
             if is_codex_session_header(value) {
                 if let Some(ts) = extract_timestamp(value) {
                     session_start_ts = Some(ts);
@@ -171,6 +175,9 @@ fn import_codex_file(
         let mut timestamp = None;
 
         if let Some(parsed) = parse_codex_line(&line) {
+            if let Some(id) = parsed.session_id {
+                session_id = id;
+            }
             role = parsed.role;
             content = parsed.content;
             timestamp = parsed.timestamp;
@@ -251,6 +258,29 @@ fn is_codex_session_header(value: &Value) -> bool {
         return false;
     }
     true
+}
+
+fn extract_codex_session_id(value: &Value) -> Option<String> {
+    for ptr in [
+        "/payload/id",
+        "/id",
+        "/payload/conversation_id",
+        "/conversation_id",
+        "/payload/conversationId",
+        "/conversationId",
+        "/payload/session_id",
+        "/session_id",
+        "/payload/sessionId",
+        "/sessionId",
+    ] {
+        if let Some(id) = value.pointer(ptr).and_then(Value::as_str) {
+            let id = id.trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn import_claude_file(
