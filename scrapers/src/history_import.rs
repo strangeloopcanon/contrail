@@ -114,7 +114,7 @@ fn import_codex_root(
 
     for path in files {
         if let Err(e) = import_codex_file(&path, writer, sentry, existing, stats) {
-            eprintln!("import codex file failed: {:?}: {e}", path);
+            tracing::warn!(path = ?path, err = %e, "import codex file failed");
             stats.errors += 1;
         }
     }
@@ -147,7 +147,7 @@ fn import_codex_file(
             Ok(l) => l,
             Err(e) => {
                 stats.errors += 1;
-                eprintln!("read line failed: {e}");
+                tracing::warn!(err = %e, "read line failed");
                 continue;
             }
         };
@@ -301,7 +301,7 @@ fn import_claude_file(
             Ok(l) => l,
             Err(e) => {
                 stats.errors += 1;
-                eprintln!("read line failed: {e}");
+                tracing::warn!(err = %e, "read line failed");
                 continue;
             }
         };
@@ -402,7 +402,7 @@ fn import_claude_projects_root(
             if let Err(e) =
                 import_claude_session_file(&session_path, writer, sentry, existing, stats)
             {
-                eprintln!("import claude session file failed: {:?}: {e}", session_path);
+                tracing::warn!(path = ?session_path, err = %e, "import claude session file failed");
                 stats.errors += 1;
             }
         }
@@ -433,7 +433,7 @@ fn import_claude_session_file(
             Ok(l) => l,
             Err(e) => {
                 stats.errors += 1;
-                eprintln!("read line failed: {e}");
+                tracing::warn!(err = %e, "read line failed");
                 continue;
             }
         };
@@ -511,7 +511,7 @@ fn import_cursor_root(
 
     for db_path in dbs {
         if let Err(e) = import_cursor_db(&db_path, writer, sentry, existing, stats) {
-            eprintln!("import cursor db failed: {:?}: {e}", db_path);
+            tracing::warn!(path = ?db_path, err = %e, "import cursor db failed");
             stats.errors += 1;
         }
     }
@@ -644,7 +644,7 @@ fn import_antigravity_root(
 
     for session_path in sessions {
         if let Err(e) = import_antigravity_session(&session_path, writer, sentry, existing, stats) {
-            eprintln!("import antigravity session failed: {:?}: {e}", session_path);
+            tracing::warn!(path = ?session_path, err = %e, "import antigravity session failed");
             stats.errors += 1;
         }
     }
@@ -771,7 +771,7 @@ fn import_antigravity_session(
             existing,
             stats,
         ) {
-            eprintln!("import antigravity artifact failed: {:?}: {e}", md_path);
+            tracing::warn!(path = ?md_path, err = %e, "import antigravity artifact failed");
             stats.errors += 1;
         }
     }

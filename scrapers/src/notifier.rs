@@ -8,11 +8,14 @@ impl Notifier {
     }
 
     pub fn send_notification(&self, title: &str, body: &str) {
-        let _ = Notification::new()
+        if let Err(e) = Notification::new()
             .summary(title)
             .body(body)
-            .sound_name("Glass") // Mac sound
-            .show();
+            .sound_name("Glass")
+            .show()
+        {
+            tracing::warn!(err = %e, "failed to send desktop notification");
+        }
     }
 }
 

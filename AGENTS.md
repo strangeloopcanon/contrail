@@ -174,3 +174,12 @@ This is a Rust project.
   - `cargo test`
   - `cargo fmt`
   - `cargo clippy`
+
+## memex (tools/memex)
+
+Session context layer for coding agents. Lives at `tools/memex/` and builds a `memex` binary.
+
+- `memex init` -- sets up `.context/` in a repo, detects active agents, wires agent instructions, installs a post-checkout git hook.
+- `memex sync` -- pulls recent transcripts from Cursor/Codex/Claude/Gemini native storage into `.context/sessions/`.
+- Shares session parsers and DLP/redaction from the `scrapers` crate.
+- Independent of the contrail daemon; they can run separately or together.

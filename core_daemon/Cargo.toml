@@ -7,6 +7,8 @@ edition = "2021"
 scrapers = { path = "../scrapers" }
 tokio = { version = "1.37.0", features = ["full"] }
 anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 notify-rust = "4.11.0"

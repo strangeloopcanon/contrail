@@ -1,5 +1,76 @@
 use chrono::{DateTime, TimeZone, Utc};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// Unified parsed-line type shared by all source parsers (Claude, Codex, etc.).
+#[derive(Debug, Clone)]
+pub struct ParsedLine {
+    pub role: String,
+    pub content: String,
+    pub timestamp: Option<DateTime<Utc>>,
+    pub session_id: Option<String>,
+    pub project_context: Option<String>,
+    pub metadata: Map<String, Value>,
+}
+
+// ── Shared metadata helpers ─────────────────────────────────────────────
+
+/// Merge usage-related keys from a JSON object into flat `usage_*` metadata fields.
+/// Handles aliases across Claude, Codex, and OpenAI response shapes.
+pub fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            match k.as_str() {
+                "total" | "total_tokens" | "totalTokens" => {
+                    insert_scalar(meta, "usage_total_tokens", v)
+                }
+                "prompt" | "prompt_tokens" | "promptTokens" | "input" | "input_tokens" => {
+                    insert_scalar(meta, "usage_prompt_tokens", v)
+                }
+                "completion" | "completion_tokens" | "completionTokens" | "output"
+                | "output_tokens" => insert_scalar(meta, "usage_completion_tokens", v),
+                "cache_read_input_tokens" | "cached_tokens" => {
+                    insert_scalar(meta, "usage_cached_input_tokens", v)
+                }
+                "cache_creation_input_tokens" => {
+                    insert_scalar(meta, "usage_cache_creation_tokens", v)
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Merge latency / duration metrics into flat metadata fields.
+pub fn append_metrics(meta: &mut Map<String, Value>, value: &Value) {
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            match k.as_str() {
+                "latency" | "latencyMs" | "latency_ms" => insert_scalar(meta, "latency_ms", v),
+                "duration" | "durationMs" | "duration_ms" => insert_scalar(meta, "duration_ms", v),
+                "wallTime" | "wall_time_ms" => insert_scalar(meta, "wall_time_ms", v),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Insert a scalar JSON value (string / number / bool) into a metadata map.
+pub fn insert_scalar(meta: &mut Map<String, Value>, key: &str, value: &Value) {
+    match value {
+        Value::String(s) => {
+            meta.insert(key.to_string(), Value::String(s.clone()));
+        }
+        Value::Number(n) => {
+            meta.insert(key.to_string(), Value::Number(n.clone()));
+        }
+        Value::Bool(b) => {
+            meta.insert(key.to_string(), Value::Bool(*b));
+        }
+        _ => {}
+    }
+}
+
+// ── Text extraction ─────────────────────────────────────────────────────
 
 pub fn extract_text(value: &Value) -> Option<String> {
     extract_text_depth(value, 0)
