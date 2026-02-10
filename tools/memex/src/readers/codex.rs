@@ -55,6 +55,17 @@ fn read_codex_jsonl(
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
+    // Fast path: skip reading old session files entirely. This keeps `memex sync`
+    // and post-commit linking snappy even with large ~/.codex/sessions archives.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(modified) = meta.modified() {
+            let mod_time: DateTime<Utc> = modified.into();
+            if mod_time < *cutoff {
+                return Ok(());
+            }
+        }
+    }
+
     let file = std::fs::File::open(path)?;
     let reader = BufReader::new(file);
 

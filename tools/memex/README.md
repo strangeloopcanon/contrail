@@ -61,6 +61,39 @@ memex sync --days 90    # last 90 days
 
 Skips sessions that are already synced (by filename). Secrets are redacted before writing.
 
+### `memex link-commit`
+
+Records a best-effort link between the current `HEAD` commit and agent sessions that were active around commit time.
+
+This is normally invoked automatically by the `post-commit` git hook installed by `memex init`.
+
+It appends JSONL records to:
+- `.context/commits.jsonl`
+
+### `memex explain <commit-ish>`
+
+Explain a commit by showing the agent sessions that were active when it was made.
+
+```bash
+memex explain HEAD
+memex explain 4d4e12d
+memex explain main~1
+```
+
+If session files are missing locally, run:
+- `memex sync` (to regenerate `.context/sessions/` from local agent storage), or
+- `memex unlock` (if your team shares `.context/vault.age`).
+
+### `memex search <query>`
+
+Greppable search across `.context/sessions/*.md` + `.context/LEARNINGS.md`.
+
+```bash
+memex search "migrate"
+memex search "panic" --days 7
+memex search "TODO" --files
+```
+
 ### When does sync run?
 
 Three options, all compatible:

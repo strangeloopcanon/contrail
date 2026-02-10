@@ -65,6 +65,18 @@ fn read_session_jsonl(
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
+    // Fast path: skip reading old session files entirely based on mtime.
+    // The JSONL content can be large, and we don't need to parse historical
+    // sessions when syncing or linking recent work.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(modified) = meta.modified() {
+            let mod_time: DateTime<Utc> = modified.into();
+            if mod_time < *cutoff {
+                return Ok(());
+            }
+        }
+    }
+
     let file = std::fs::File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -147,6 +159,16 @@ fn read_history_file(
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
+    // Fast path: skip the global history file if it hasn't been touched since cutoff.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(modified) = meta.modified() {
+            let mod_time: DateTime<Utc> = modified.into();
+            if mod_time < *cutoff {
+                return Ok(());
+            }
+        }
+    }
+
     let file = std::fs::File::open(path)?;
     let reader = BufReader::new(file);
 
