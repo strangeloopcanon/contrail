@@ -11,18 +11,46 @@ Contrail has two pieces:
 
 Both tools are local-first. You decide what (if anything) to commit or share.
 
-## Quickstart
+## Install
 
-### Build
+```bash
+# Install memex (per-repo context layer)
+cargo install --git https://github.com/strangeloopcanon/contrail memex
+
+# Install the flight recorder daemon
+cargo install --git https://github.com/strangeloopcanon/contrail core_daemon
+
+# Optional: dashboard, importer, analysis
+cargo install --git https://github.com/strangeloopcanon/contrail dashboard
+cargo install --git https://github.com/strangeloopcanon/contrail importer
+cargo install --git https://github.com/strangeloopcanon/contrail analysis
+```
+
+Or build everything locally:
 
 ```bash
 ./install.sh
 ```
 
-### Run Live Capture
+If you built locally, the binaries will be in `./target/release/` (e.g. `./target/release/memex`). The Quickstart commands below assume the tools are on your `PATH` (as they are after `cargo install`); otherwise, prefix them with `./target/release/`.
+
+## Quickstart
+
+### Per-Repo Memory (memex)
+
+In any repo:
 
 ```bash
-./target/release/core_daemon
+memex init
+memex sync
+```
+
+`memex init` creates `.context/`, wires detected agents (Codex/Claude/Cursor/Gemini) to look there for prior context, and installs git hooks for commit linkage. `memex sync` pulls recent sessions from native storage into `.context/sessions/` as markdown, with redaction.
+
+### Live Capture
+
+```bash
+core_daemon
 ```
 
 On first run, `core_daemon` does a one-time historical backfill and then switches to live watchers. To re-run backfill, delete `~/.contrail/state/history_import_done.json` and restart the daemon.
@@ -30,23 +58,17 @@ On first run, `core_daemon` does a one-time historical backfill and then switche
 ### View Logs
 
 ```bash
-./target/release/dashboard
+dashboard
 # open http://127.0.0.1:3000
 ```
 
-### Enable Per-Repo Memory (memex)
-
-In any repo:
+### Explain a Commit
 
 ```bash
-cargo install --path tools/memex
-memex init
-memex sync
+memex explain abc123
 ```
 
-`memex init` creates `.context/` and wires detected agents (Codex/Claude/Cursor/Gemini) to look there for prior context. `memex sync` pulls recent sessions from native storage into `.context/sessions/` as markdown, with redaction.
-
-For more detail, see `tools/memex/README.md`.
+Shows which agent sessions were active when a commit was made — the reasoning behind the diff.
 
 ## Data Model
 
