@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "core_daemon", "dashboard", "decoder", "importer",
+    "core_daemon", "dashboard", "importer",
     "scrapers", "tools/exporter", "tools/wrapup", "analysis",
+    "tools/memex",
 ]
 resolver = "2"

@@ -2,6 +2,37 @@ use anyhow::{Context, Result};
 use std::env;
 use std::path::PathBuf;
 
+// ── Default path constants (macOS) ──────────────────────────────────────
+
+/// Master log file relative to home.
+const DEFAULT_LOG_REL: &str = ".contrail/logs/master_log.jsonl";
+
+/// Cursor workspace storage relative to home.
+const DEFAULT_CURSOR_STORAGE_REL: &str = "Library/Application Support/Cursor/User/workspaceStorage";
+
+/// Codex sessions directory relative to home.
+const DEFAULT_CODEX_ROOT_REL: &str = ".codex/sessions";
+
+/// Claude global history file relative to home.
+const DEFAULT_CLAUDE_HISTORY_REL: &str = ".claude/history.jsonl";
+
+/// Claude per-project session files relative to home.
+const DEFAULT_CLAUDE_PROJECTS_REL: &str = ".claude/projects";
+
+/// Antigravity brain directory relative to home.
+const DEFAULT_ANTIGRAVITY_BRAIN_REL: &str = ".gemini/antigravity/brain";
+
+/// History import completion marker relative to home.
+pub const HISTORY_IMPORT_MARKER_REL: &str = ".contrail/state/history_import_done.json";
+
+// ── Default silence thresholds (seconds) ────────────────────────────────
+
+const DEFAULT_CURSOR_SILENCE_SECS: u64 = 5;
+const DEFAULT_CODEX_SILENCE_SECS: u64 = 3;
+const DEFAULT_CLAUDE_SILENCE_SECS: u64 = 5;
+
+// ── Config struct ───────────────────────────────────────────────────────
+
 #[derive(Clone, Debug)]
 pub struct ContrailConfig {
     pub log_path: PathBuf,
@@ -22,42 +53,51 @@ pub struct ContrailConfig {
 impl ContrailConfig {
     pub fn from_env() -> Result<Self> {
         let home = dirs::home_dir().context("could not resolve home directory")?;
-        let log_default = home.join(".contrail/logs/master_log.jsonl");
 
         Ok(Self {
-            log_path: env_path("CONTRAIL_LOG_PATH", log_default, home.as_path()),
+            log_path: env_path(
+                "CONTRAIL_LOG_PATH",
+                home.join(DEFAULT_LOG_REL),
+                home.as_path(),
+            ),
             cursor_storage: env_path(
                 "CONTRAIL_CURSOR_STORAGE",
-                home.join("Library/Application Support/Cursor/User/workspaceStorage"),
+                home.join(DEFAULT_CURSOR_STORAGE_REL),
                 home.as_path(),
             ),
             codex_root: env_path(
                 "CONTRAIL_CODEX_ROOT",
-                home.join(".codex/sessions"),
+                home.join(DEFAULT_CODEX_ROOT_REL),
                 home.as_path(),
             ),
             claude_history: env_path(
                 "CONTRAIL_CLAUDE_HISTORY",
-                home.join(".claude/history.jsonl"),
+                home.join(DEFAULT_CLAUDE_HISTORY_REL),
                 home.as_path(),
             ),
             claude_projects: env_path(
                 "CONTRAIL_CLAUDE_PROJECTS",
-                home.join(".claude/projects"),
+                home.join(DEFAULT_CLAUDE_PROJECTS_REL),
                 home.as_path(),
             ),
             antigravity_brain: env_path(
                 "CONTRAIL_ANTIGRAVITY_BRAIN",
-                home.join(".gemini/antigravity/brain"),
+                home.join(DEFAULT_ANTIGRAVITY_BRAIN_REL),
                 home.as_path(),
             ),
             enable_cursor: env_bool("CONTRAIL_ENABLE_CURSOR", true),
             enable_codex: env_bool("CONTRAIL_ENABLE_CODEX", true),
             enable_claude: env_bool("CONTRAIL_ENABLE_CLAUDE", true),
             enable_antigravity: env_bool("CONTRAIL_ENABLE_ANTIGRAVITY", true),
-            cursor_silence_secs: env_u64("CONTRAIL_CURSOR_SILENCE_SECS", 5),
-            codex_silence_secs: env_u64("CONTRAIL_CODEX_SILENCE_SECS", 3),
-            claude_silence_secs: env_u64("CONTRAIL_CLAUDE_SILENCE_SECS", 5),
+            cursor_silence_secs: env_u64(
+                "CONTRAIL_CURSOR_SILENCE_SECS",
+                DEFAULT_CURSOR_SILENCE_SECS,
+            ),
+            codex_silence_secs: env_u64("CONTRAIL_CODEX_SILENCE_SECS", DEFAULT_CODEX_SILENCE_SECS),
+            claude_silence_secs: env_u64(
+                "CONTRAIL_CLAUDE_SILENCE_SECS",
+                DEFAULT_CLAUDE_SILENCE_SECS,
+            ),
         })
     }
 }

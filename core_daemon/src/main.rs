@@ -1,30 +1,34 @@
 use anyhow::Context;
 use scrapers::config::ContrailConfig;
-use scrapers::harvester::Harvester;
 use scrapers::history_import;
 use scrapers::log_writer::LogWriter;
+use scrapers::watchers::Harvester;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task;
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("Starting Contrail Daemon...");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("starting contrail daemon");
 
     let config = ContrailConfig::from_env()?;
 
-    // Phase 1: Create directory structure
     let contrail_dir = config
         .log_path
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| config.log_path.clone());
     fs::create_dir_all(&contrail_dir).context("Failed to create log directory")?;
-    println!(
-        "Ensured Contrail log directory exists at {:?}",
-        contrail_dir
-    );
+    info!(path = ?contrail_dir, "ensured log directory exists");
 
     maybe_import_history(&config);
 
@@ -41,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     let cursor_handle = task::spawn(async move {
         if enable_cursor {
             if let Err(e) = h1.run_cursor_watcher().await {
-                eprintln!("Cursor Watcher failed: {:?}", e);
+                error!(err = ?e, "cursor watcher failed");
             }
         }
     });
@@ -50,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     let codex_handle = task::spawn(async move {
         if enable_codex {
             if let Err(e) = h2.run_codex_watcher().await {
-                eprintln!("Codex Watcher failed: {:?}", e);
+                error!(err = ?e, "codex watcher failed");
             }
         }
     });
@@ -59,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
     let antigravity_handle = task::spawn(async move {
         if enable_antigravity {
             if let Err(e) = h3.run_antigravity_watcher().await {
-                eprintln!("Antigravity Watcher failed: {:?}", e);
+                error!(err = ?e, "antigravity watcher failed");
             }
         }
     });
@@ -68,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let claude_handle = task::spawn(async move {
         if enable_claude {
             if let Err(e) = h4.run_claude_watcher().await {
-                eprintln!("Claude Watcher failed: {:?}", e);
+                error!(err = ?e, "claude watcher failed");
             }
         }
     });
@@ -77,20 +81,37 @@ async fn main() -> anyhow::Result<()> {
     let claude_projects_handle = task::spawn(async move {
         if enable_claude {
             if let Err(e) = h5.run_claude_projects_watcher().await {
-                eprintln!("Claude Projects Watcher failed: {:?}", e);
+                error!(err = ?e, "claude projects watcher failed");
             }
         }
     });
 
-    // Wait for tasks (they shouldn't finish unless error)
-    let _ = tokio::join!(
-        cursor_handle,
-        codex_handle,
-        antigravity_handle,
-        claude_handle,
-        claude_projects_handle
-    );
+    // Wait for either all tasks to complete or a shutdown signal
+    tokio::select! {
+        _ = async {
+            let _ = tokio::join!(
+                cursor_handle,
+                codex_handle,
+                antigravity_handle,
+                claude_handle,
+                claude_projects_handle
+            );
+        } => {
+            warn!("all watcher tasks exited unexpectedly");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("received shutdown signal, stopping");
+        }
+    }
 
+    // Drop the harvester so its LogWriter sender drops,
+    // which closes the channel and lets the background writer flush.
+    drop(harvester);
+
+    // Brief pause for the log writer to finish flushing
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    info!("contrail daemon stopped");
     Ok(())
 }
 
@@ -99,17 +120,19 @@ fn maybe_import_history(config: &ContrailConfig) {
         Some(h) => h,
         None => return,
     };
-    let marker_path = home.join(".contrail/state/history_import_done.json");
+    let marker_path = home.join(scrapers::config::HISTORY_IMPORT_MARKER_REL);
     if marker_path.exists() {
         return;
     }
 
-    println!("Backfilling historical Codex/Claude logs (one-time)...");
+    info!("backfilling historical codex/claude logs (one-time)");
     match history_import::import_history(config) {
         Ok(stats) => {
-            println!(
-                "History import complete: imported={} skipped={} errors={}",
-                stats.imported, stats.skipped, stats.errors
+            info!(
+                imported = stats.imported,
+                skipped = stats.skipped,
+                errors = stats.errors,
+                "history import complete"
             );
             if let Some(dir) = marker_path.parent() {
                 let _ = fs::create_dir_all(dir);
@@ -133,7 +156,7 @@ fn maybe_import_history(config: &ContrailConfig) {
             );
         }
         Err(e) => {
-            eprintln!("History import failed (continuing): {e:?}");
+            error!(err = ?e, "history import failed, continuing");
         }
     }
 }

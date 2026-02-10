@@ -70,7 +70,5 @@
 - [ ] **Phase 7: Refinement**
     - [x] Connect Harvester to `MasterLog` writer (Done in Phase 1)
     - [ ] Implement SQLite storage for logs (Optional for now)
-
-- [ ] **Phase 6: Refinement**
     - [ ] Add error handling for file locking
     - [ ] Add configuration file support

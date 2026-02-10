@@ -1,16 +1,5 @@
-use crate::parse::{extract_text, parse_timestamp_value};
-use chrono::{DateTime, Utc};
+use crate::parse::{append_metrics, append_usage, extract_text, parse_timestamp_value, ParsedLine};
 use serde_json::{Map, Value};
-
-#[derive(Debug, Clone)]
-pub struct ParsedLine {
-    pub role: String,
-    pub content: String,
-    pub timestamp: Option<DateTime<Utc>>,
-    pub session_id: Option<String>,
-    pub project_context: Option<String>,
-    pub metadata: Map<String, Value>,
-}
 
 pub fn parse_codex_line(raw: &str) -> Option<ParsedLine> {
     let json = serde_json::from_str::<Value>(raw).ok()?;
@@ -369,53 +358,6 @@ fn append_token_count_usage(meta: &mut Map<String, Value>, json: &Value) -> Opti
         "Token count: last_total={:?}, cumulative_total={:?}",
         last_total, total_total
     ))
-}
-
-fn append_usage(meta: &mut Map<String, Value>, value: &Value) {
-    if let Some(obj) = value.as_object() {
-        for (k, v) in obj {
-            match k.as_str() {
-                "total" | "total_tokens" | "totalTokens" => {
-                    insert_scalar(meta, "usage_total_tokens", v)
-                }
-                "prompt" | "prompt_tokens" | "promptTokens" | "input" => {
-                    insert_scalar(meta, "usage_prompt_tokens", v)
-                }
-                "completion" | "completion_tokens" | "completionTokens" | "output" => {
-                    insert_scalar(meta, "usage_completion_tokens", v)
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-fn append_metrics(meta: &mut Map<String, Value>, value: &Value) {
-    if let Some(obj) = value.as_object() {
-        for (k, v) in obj {
-            match k.as_str() {
-                "latency" | "latencyMs" | "latency_ms" => insert_scalar(meta, "latency_ms", v),
-                "duration" | "durationMs" | "duration_ms" => insert_scalar(meta, "duration_ms", v),
-                "wallTime" | "wall_time_ms" => insert_scalar(meta, "wall_time_ms", v),
-                _ => {}
-            }
-        }
-    }
-}
-
-fn insert_scalar(meta: &mut Map<String, Value>, key: &str, value: &Value) {
-    match value {
-        Value::String(s) => {
-            meta.insert(key.to_string(), Value::String(s.clone()));
-        }
-        Value::Number(n) => {
-            meta.insert(key.to_string(), Value::Number(n.clone()));
-        }
-        Value::Bool(b) => {
-            meta.insert(key.to_string(), Value::Bool(*b));
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
