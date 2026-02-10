@@ -1,5 +1,7 @@
 mod detect;
+mod explain;
 mod init;
+mod link;
 mod readers;
 mod render;
 mod share;
@@ -31,6 +33,17 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         quiet: bool,
     },
+    /// Record a link between the current HEAD commit and active agent sessions
+    LinkCommit {
+        /// Suppress output (for use in git hooks)
+        #[arg(long, default_value_t = false)]
+        quiet: bool,
+    },
+    /// Show which agent sessions were active when a commit was made
+    Explain {
+        /// Commit SHA or prefix to look up
+        commit: String,
+    },
     /// Encrypt sessions + learnings into .context/vault.age for sharing via git
     Share {
         /// Passphrase (prompted interactively if omitted)
@@ -52,6 +65,8 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Init => init::run_init(&repo_root),
         Commands::Sync { days, quiet } => sync::run_sync(&repo_root, days, quiet),
+        Commands::LinkCommit { quiet } => link::run_link_commit(&repo_root, quiet),
+        Commands::Explain { commit } => explain::run_explain(&repo_root, &commit),
         Commands::Share { passphrase } => share::run_share(&repo_root, passphrase),
         Commands::Unlock { passphrase } => share::run_unlock(&repo_root, passphrase),
     }

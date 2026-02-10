@@ -195,19 +195,53 @@ fi
 
 const HOOK_MARKER: &str = "# memex post-checkout hook";
 
+const POST_COMMIT_HOOK_SCRIPT: &str = r#"#!/bin/sh
+# memex post-commit hook: link commit to active agent sessions.
+# Disable with MEMEX_HOOK=0 in your environment.
+
+if [ "${MEMEX_HOOK:-1}" = "0" ]; then
+    exit 0
+fi
+
+# Only run if memex is on PATH
+if command -v memex >/dev/null 2>&1; then
+    memex link-commit --quiet &
+fi
+"#;
+
+const POST_COMMIT_HOOK_MARKER: &str = "# memex post-commit hook";
+
 fn install_git_hook(repo_root: &Path) -> Result<()> {
     let hooks_dir = repo_root.join(".git/hooks");
     if !hooks_dir.is_dir() {
-        println!("  skip git hook (not a git repo or .git/hooks missing)");
+        println!("  skip git hooks (not a git repo or .git/hooks missing)");
         return Ok(());
     }
 
-    let hook_path = hooks_dir.join("post-checkout");
+    install_single_hook(&hooks_dir, "post-checkout", HOOK_SCRIPT, HOOK_MARKER)?;
+
+    install_single_hook(
+        &hooks_dir,
+        "post-commit",
+        POST_COMMIT_HOOK_SCRIPT,
+        POST_COMMIT_HOOK_MARKER,
+    )?;
+
+    Ok(())
+}
+
+fn install_single_hook(
+    hooks_dir: &Path,
+    hook_name: &str,
+    script: &str,
+    marker: &str,
+) -> Result<()> {
+    let hook_path = hooks_dir.join(hook_name);
 
     if hook_path.exists() {
         let existing = fs::read_to_string(&hook_path)?;
-        if existing.contains(HOOK_MARKER) {
-            println!("  skip git hook (already installed)");
+        if existing.contains(marker) {
+            println!("  skip .git/hooks/{} (already installed)", hook_name);
             return Ok(());
         }
         // Append to existing hook
@@ -217,17 +251,15 @@ fn install_git_hook(repo_root: &Path) -> Result<()> {
         }
         content.push('\n');
         // Skip the shebang from our script since the file already has one
-        let hook_body = HOOK_SCRIPT
-            .strip_prefix("#!/bin/sh\n")
-            .unwrap_or(HOOK_SCRIPT);
+        let hook_body = script.strip_prefix("#!/bin/sh\n").unwrap_or(script);
         content.push_str(hook_body);
         fs::write(&hook_path, content)?;
         set_executable(&hook_path);
-        println!("  patched .git/hooks/post-checkout (appended memex hook)");
+        println!("  patched .git/hooks/{} (appended memex hook)", hook_name);
     } else {
-        fs::write(&hook_path, HOOK_SCRIPT)?;
+        fs::write(&hook_path, script)?;
         set_executable(&hook_path);
-        println!("  wrote .git/hooks/post-checkout");
+        println!("  wrote .git/hooks/{}", hook_name);
     }
 
     Ok(())
@@ -272,8 +304,10 @@ fn print_summary(repo_root: &Path, agents: &DetectedAgents) {
     }
 
     println!();
-    println!("  Git hook: post-checkout runs `memex sync` on checkout (branch switch).");
-    println!("            Disable with MEMEX_HOOK=0 in your environment.");
+    println!("  Git hooks:");
+    println!("    post-checkout  — runs `memex sync` on branch switch");
+    println!("    post-commit    — links commits to active agent sessions");
+    println!("    Disable both with MEMEX_HOOK=0 in your environment.");
     println!();
     println!("Next: run `memex sync` to pull in past session transcripts.");
 }
