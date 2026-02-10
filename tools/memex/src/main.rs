@@ -4,6 +4,7 @@ mod init;
 mod link;
 mod readers;
 mod render;
+mod search;
 mod share;
 mod sync;
 mod types;
@@ -44,6 +45,23 @@ enum Commands {
         /// Commit SHA or prefix to look up
         commit: String,
     },
+    /// Greppable search across synced sessions + learnings
+    Search {
+        /// Literal text query (substring match, not regex)
+        query: String,
+        /// Only search session files modified in the last N days (learnings always searched)
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Maximum number of matches to print (default: 200)
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Case-sensitive search (default: false)
+        #[arg(long, default_value_t = false)]
+        case_sensitive: bool,
+        /// Only print matching filenames (like `rg -l`)
+        #[arg(long, default_value_t = false)]
+        files: bool,
+    },
     /// Encrypt sessions + learnings into .context/vault.age for sharing via git
     Share {
         /// Passphrase (prompted interactively if omitted)
@@ -67,6 +85,13 @@ fn main() -> Result<()> {
         Commands::Sync { days, quiet } => sync::run_sync(&repo_root, days, quiet),
         Commands::LinkCommit { quiet } => link::run_link_commit(&repo_root, quiet),
         Commands::Explain { commit } => explain::run_explain(&repo_root, &commit),
+        Commands::Search {
+            query,
+            days,
+            limit,
+            case_sensitive,
+            files,
+        } => search::run_search(&repo_root, &query, days, limit, case_sensitive, files),
         Commands::Share { passphrase } => share::run_share(&repo_root, passphrase),
         Commands::Unlock { passphrase } => share::run_unlock(&repo_root, passphrase),
     }

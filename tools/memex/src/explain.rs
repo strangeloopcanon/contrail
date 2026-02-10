@@ -1,7 +1,11 @@
 use crate::link;
+use crate::{detect, readers};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 /// Explain a commit: show which agent sessions were active when it was made.
 pub fn run_explain(repo_root: &Path, commit_ref: &str) -> Result<()> {
@@ -14,15 +18,31 @@ pub fn run_explain(repo_root: &Path, commit_ref: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Find matching commit(s) by SHA prefix
-    let matches: Vec<&link::CommitLink> = links
-        .iter()
-        .filter(|l| l.sha.starts_with(commit_ref) || l.short_sha.starts_with(commit_ref))
-        .collect();
+    // Allow "commit-ish" (HEAD, refs, HEAD~1, etc.), not just SHA prefixes.
+    let resolved_sha = git_rev_parse(repo_root, commit_ref);
+
+    // Find matching commit(s) by SHA or SHA prefix.
+    let matches: Vec<&link::CommitLink> = match &resolved_sha {
+        Some(sha) => {
+            let short = short_sha(sha);
+            links
+                .iter()
+                .filter(|l| l.sha == sha.as_str() || l.short_sha == short)
+                .collect()
+        }
+        None => links
+            .iter()
+            .filter(|l| l.sha.starts_with(commit_ref) || l.short_sha.starts_with(commit_ref))
+            .collect(),
+    };
 
     if matches.is_empty() {
         // The commit exists but wasn't linked — try to find sessions by timestamp
-        println!("Commit {} not found in .context/commits.jsonl.", commit_ref);
+        if let Some(sha) = resolved_sha {
+            println!("Commit {} not found in .context/commits.jsonl.", sha);
+        } else {
+            println!("Commit {} not found in .context/commits.jsonl.", commit_ref);
+        }
         println!();
         println!("This commit was made before the post-commit hook was installed,");
         println!("or memex wasn't initialized in this repo at the time.");
@@ -59,23 +79,76 @@ pub fn run_explain(repo_root: &Path, commit_ref: &str) -> Result<()> {
     println!();
 
     let sessions_dir = repo_root.join(".context/sessions");
+    let mut fallback_index: Option<HashMap<String, crate::types::Session>> = None;
 
     for session_file in &link.active_sessions {
         let path = sessions_dir.join(session_file);
-        print_session_summary(&path, session_file);
+        if path.is_file() {
+            print_session_summary_from_file(&path, session_file);
+            continue;
+        }
+
+        // Fall back to agent storage (local) if we haven't synced/unlocked `.context/sessions/` yet.
+        if fallback_index.is_none() {
+            fallback_index = Some(load_sessions_index(repo_root));
+        }
+        let index = fallback_index.as_ref().unwrap();
+
+        if let Some(session) = index.get(session_file) {
+            print_session_summary_from_struct(session, session_file);
+        } else {
+            println!("  --- {} ---", session_file);
+            println!("    (not found in .context/sessions/ or local agent storage)");
+            println!(
+                "    Hint: run `memex sync` (or `memex unlock` if your team shares vault.age)."
+            );
+            println!();
+        }
     }
 
     Ok(())
 }
 
+fn git_rev_parse(repo_root: &Path, commit_ref: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", commit_ref])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn short_sha(full: &str) -> String {
+    if full.len() >= 7 {
+        full[..7].to_string()
+    } else {
+        full.to_string()
+    }
+}
+
+fn load_sessions_index(repo_root: &Path) -> HashMap<String, crate::types::Session> {
+    let agents = detect::detect_agents(repo_root);
+    if !agents.any() {
+        return HashMap::new();
+    }
+
+    // Generous cutoff for ad-hoc explain runs; we only build this index when
+    // the linked `.md` files are missing anyway.
+    let sessions = readers::read_all_sessions(repo_root, &agents, 30, true);
+    sessions.into_iter().map(|s| (s.filename(), s)).collect()
+}
+
 /// Print a short summary of a session file (first few lines).
-fn print_session_summary(path: &Path, filename: &str) {
+fn print_session_summary_from_file(path: &Path, filename: &str) {
     println!("  --- {} ---", filename);
 
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => {
-            println!("    (file not found — may have been cleaned up)");
+            println!("    (file not readable)");
             println!();
             return;
         }
@@ -118,5 +191,53 @@ fn print_session_summary(path: &Path, filename: &str) {
         println!("    {}", files_line);
     }
 
+    println!("    Path: .context/sessions/{}", filename);
     println!();
+}
+
+fn print_session_summary_from_struct(session: &crate::types::Session, filename: &str) {
+    println!("  --- {} ---", filename);
+
+    let started = fmt_ts(session.started_at);
+    let ended = fmt_ts(session.ended_at);
+    let mut meta = vec![format!("Tool: {}", session.tool)];
+    if let Some(b) = &session.branch {
+        meta.push(format!("Branch: {}", b));
+    }
+    if started != "unknown" || ended != "unknown" {
+        meta.push(format!("Time: {} → {}", started, ended));
+    }
+
+    for line in meta {
+        println!("    {}", line);
+    }
+
+    if let Some(prompt) = first_user_prompt(session) {
+        println!("    First prompt: {}", truncate_one_line(prompt, 120));
+    }
+
+    println!("    Path: .context/sessions/{}", filename);
+    println!();
+}
+
+fn first_user_prompt(session: &crate::types::Session) -> Option<&str> {
+    session
+        .turns
+        .iter()
+        .find(|t| t.role.eq_ignore_ascii_case("user") || t.role.eq_ignore_ascii_case("human"))
+        .map(|t| t.content.as_str())
+}
+
+fn truncate_one_line(s: &str, max: usize) -> String {
+    let line = s.lines().next().unwrap_or("").trim();
+    if line.len() > max {
+        format!("{}...", &line[..max])
+    } else {
+        line.to_string()
+    }
+}
+
+fn fmt_ts(ts: Option<DateTime<Utc>>) -> String {
+    ts.map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
