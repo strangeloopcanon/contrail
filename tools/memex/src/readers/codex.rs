@@ -9,7 +9,7 @@ use std::path::Path;
 /// Read Codex CLI/Desktop sessions for the given repo.
 /// Scans ~/.codex/sessions/YYYY/MM/DD/*.jsonl, filters by cwd.
 pub fn read_sessions(
-    repo_root: &Path,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     _quiet: bool,
 ) -> Result<Vec<Session>> {
@@ -18,18 +18,17 @@ pub fn read_sessions(
         _ => return Ok(Vec::new()),
     };
 
-    let repo_str = repo_root.to_string_lossy().to_string();
     let mut sessions: HashMap<String, Session> = HashMap::new();
 
     // Walk YYYY/MM/DD structure
-    walk_sessions_dir(&sessions_root, &repo_str, cutoff, &mut sessions)?;
+    walk_sessions_dir(&sessions_root, repo_roots, cutoff, &mut sessions)?;
 
     Ok(sessions.into_values().collect())
 }
 
 fn walk_sessions_dir(
     dir: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
@@ -41,9 +40,9 @@ fn walk_sessions_dir(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk_sessions_dir(&path, repo_str, cutoff, sessions)?;
+            walk_sessions_dir(&path, repo_roots, cutoff, sessions)?;
         } else if path.extension().is_some_and(|e| e == "jsonl") {
-            read_codex_jsonl(&path, repo_str, cutoff, sessions)?;
+            read_codex_jsonl(&path, repo_roots, cutoff, sessions)?;
         }
     }
     Ok(())
@@ -51,7 +50,7 @@ fn walk_sessions_dir(
 
 fn read_codex_jsonl(
     path: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
@@ -88,7 +87,7 @@ fn read_codex_jsonl(
 
         // Filter by repo
         let cwd = match &parsed.project_context {
-            Some(c) if c.starts_with(repo_str) => c.clone(),
+            Some(c) if crate::aliases::matches_any_root(c, repo_roots) => c.clone(),
             _ => continue,
         };
 

@@ -3,23 +3,21 @@ use std::path::{Path, PathBuf};
 
 /// Detect which agents have been used in the given repo by checking their
 /// native storage locations for sessions referencing this repo path.
-pub fn detect_agents(repo_root: &Path) -> DetectedAgents {
+pub fn detect_agents(repo_roots: &[String]) -> DetectedAgents {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return DetectedAgents::default(),
     };
 
-    let repo_str = repo_root.to_string_lossy();
-
     DetectedAgents {
-        cursor: detect_cursor(&home, &repo_str),
-        codex: detect_codex(&home, &repo_str),
-        claude: detect_claude(&home, &repo_str),
-        gemini: detect_gemini(&home, &repo_str),
+        cursor: detect_cursor(&home, repo_roots),
+        codex: detect_codex(&home, repo_roots),
+        claude: detect_claude(&home, repo_roots),
+        gemini: detect_gemini(&home, repo_roots),
     }
 }
 
-fn detect_cursor(home: &Path, repo_str: &str) -> bool {
+fn detect_cursor(home: &Path, repo_roots: &[String]) -> bool {
     let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
     if !ws_storage.is_dir() {
         return false;
@@ -31,7 +29,7 @@ fn detect_cursor(home: &Path, repo_str: &str) -> bool {
     for entry in entries.flatten() {
         let workspace_json = entry.path().join("workspace.json");
         if let Ok(content) = std::fs::read_to_string(&workspace_json) {
-            if content.contains(repo_str) {
+            if repo_roots.iter().any(|r| content.contains(r)) {
                 return true;
             }
         }
@@ -39,15 +37,15 @@ fn detect_cursor(home: &Path, repo_str: &str) -> bool {
     false
 }
 
-fn detect_codex(home: &Path, repo_str: &str) -> bool {
+fn detect_codex(home: &Path, repo_roots: &[String]) -> bool {
     let sessions_root = home.join(".codex/sessions");
     if !sessions_root.is_dir() {
         return false;
     }
-    scan_jsonl_dir_for_repo(&sessions_root, repo_str, 500)
+    scan_jsonl_dir_for_repo(&sessions_root, repo_roots, 500)
 }
 
-fn detect_claude(home: &Path, repo_str: &str) -> bool {
+fn detect_claude(home: &Path, repo_roots: &[String]) -> bool {
     let projects_dir = home.join(".claude/projects");
     if projects_dir.is_dir() {
         // Claude Code stores per-project dirs; check if any reference this repo
@@ -58,7 +56,7 @@ fn detect_claude(home: &Path, repo_str: &str) -> bool {
                     continue;
                 }
                 // The directory name is often a hash, but session files inside contain cwd
-                if scan_jsonl_dir_for_repo(&path, repo_str, 200) {
+                if scan_jsonl_dir_for_repo(&path, repo_roots, 200) {
                     return true;
                 }
             }
@@ -67,14 +65,14 @@ fn detect_claude(home: &Path, repo_str: &str) -> bool {
 
     // Also check the global history file
     let history = home.join(".claude/history.jsonl");
-    if history.is_file() && scan_jsonl_file_for_repo(&history, repo_str, 500) {
+    if history.is_file() && scan_jsonl_file_for_repo(&history, repo_roots, 500) {
         return true;
     }
 
     false
 }
 
-fn detect_gemini(home: &Path, repo_str: &str) -> bool {
+fn detect_gemini(home: &Path, repo_roots: &[String]) -> bool {
     let brain = home.join(".gemini/antigravity/brain");
     if !brain.is_dir() {
         return false;
@@ -84,7 +82,7 @@ fn detect_gemini(home: &Path, repo_str: &str) -> bool {
         for entry in entries.flatten() {
             let task_md = entry.path().join("task.md");
             if let Ok(content) = std::fs::read_to_string(&task_md) {
-                if content.contains(repo_str) {
+                if repo_roots.iter().any(|r| content.contains(r)) {
                     return true;
                 }
             }
@@ -94,14 +92,14 @@ fn detect_gemini(home: &Path, repo_str: &str) -> bool {
 }
 
 /// Scan JSONL files in a directory (recursively) for lines containing the repo path.
-fn scan_jsonl_dir_for_repo(dir: &Path, repo_str: &str, max_files: usize) -> bool {
+fn scan_jsonl_dir_for_repo(dir: &Path, repo_roots: &[String], max_files: usize) -> bool {
     let mut checked = 0usize;
-    scan_jsonl_dir_recursive(dir, repo_str, max_files, &mut checked)
+    scan_jsonl_dir_recursive(dir, repo_roots, max_files, &mut checked)
 }
 
 fn scan_jsonl_dir_recursive(
     dir: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     max_files: usize,
     checked: &mut usize,
 ) -> bool {
@@ -115,12 +113,12 @@ fn scan_jsonl_dir_recursive(
         }
         let path = entry.path();
         if path.is_dir() {
-            if scan_jsonl_dir_recursive(&path, repo_str, max_files, checked) {
+            if scan_jsonl_dir_recursive(&path, repo_roots, max_files, checked) {
                 return true;
             }
         } else if path.extension().is_some_and(|ext| ext == "jsonl") {
             *checked += 1;
-            if scan_jsonl_file_for_repo(&path, repo_str, 100) {
+            if scan_jsonl_file_for_repo(&path, repo_roots, 100) {
                 return true;
             }
         }
@@ -129,7 +127,7 @@ fn scan_jsonl_dir_recursive(
 }
 
 /// Check if a JSONL file contains lines referencing the repo path.
-fn scan_jsonl_file_for_repo(path: &Path, repo_str: &str, max_lines: usize) -> bool {
+fn scan_jsonl_file_for_repo(path: &Path, repo_roots: &[String], max_lines: usize) -> bool {
     use std::io::{BufRead, BufReader};
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
@@ -141,7 +139,7 @@ fn scan_jsonl_file_for_repo(path: &Path, repo_str: &str, max_lines: usize) -> bo
             break;
         }
         if let Ok(line) = line {
-            if line.contains(repo_str) {
+            if repo_roots.iter().any(|r| line.contains(r)) {
                 return true;
             }
         }

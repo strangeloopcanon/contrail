@@ -1,3 +1,5 @@
+mod aliases;
+mod bundle;
 mod detect;
 mod explain;
 mod init;
@@ -64,13 +66,29 @@ enum Commands {
     },
     /// Encrypt sessions + learnings into .context/vault.age for sharing via git
     Share {
-        /// Passphrase (prompted interactively if omitted)
+        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        #[arg(long)]
+        passphrase: Option<String>,
+    },
+    /// Encrypt a single session transcript into a portable bundle under .context/bundles/
+    ShareSession {
+        /// Session filename under .context/sessions/ (e.g. 2026-02-10T12-00-00_codex-cli_abc123.md)
+        session: String,
+        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        #[arg(long)]
+        passphrase: Option<String>,
+    },
+    /// Import a shared session bundle by ID (resolves from working tree first, then git history)
+    Import {
+        /// Bundle ID (the filename stem under .context/bundles/, without extension)
+        id: String,
+        /// Passphrase (defaults to a weak built-in passphrase if omitted)
         #[arg(long)]
         passphrase: Option<String>,
     },
     /// Decrypt .context/vault.age back into sessions + learnings
     Unlock {
-        /// Passphrase (prompted interactively if omitted)
+        /// Passphrase (defaults to a weak built-in passphrase if omitted)
         #[arg(long)]
         passphrase: Option<String>,
     },
@@ -93,6 +111,11 @@ fn main() -> Result<()> {
             files,
         } => search::run_search(&repo_root, &query, days, limit, case_sensitive, files),
         Commands::Share { passphrase } => share::run_share(&repo_root, passphrase),
+        Commands::ShareSession {
+            session,
+            passphrase,
+        } => bundle::run_share_session(&repo_root, &session, passphrase),
+        Commands::Import { id, passphrase } => bundle::run_import(&repo_root, &id, passphrase),
         Commands::Unlock { passphrase } => share::run_unlock(&repo_root, passphrase),
     }
 }

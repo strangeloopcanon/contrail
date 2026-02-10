@@ -3,8 +3,10 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 
 const VAULT_FILE: &str = ".context/vault.age";
+pub const DEFAULT_PASSPHRASE: &str = "pa$$word";
 
 /// Encrypt .context/sessions/ + LEARNINGS.md into .context/vault.age.
 pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
@@ -49,16 +51,15 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     let plaintext = serde_json::to_vec(&archive).context("serialize archive")?;
 
     // Get passphrase
-    let passphrase = match passphrase {
-        Some(p) => p,
-        None => prompt_passphrase_twice()?,
-    };
+    let (passphrase, default_used) = passphrase_or_default(passphrase);
+    if default_used {
+        eprintln!(
+            "warning: using default passphrase (weak). Pass --passphrase for real encryption."
+        );
+    }
 
     // Encrypt
-    let secret = SecretString::from(passphrase);
-    let recipient = age::scrypt::Recipient::new(secret.clone());
-    let encrypted = age::encrypt(&recipient, &plaintext)
-        .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
+    let encrypted = encrypt_bytes(&passphrase, &plaintext)?;
 
     // Write vault
     let vault_path = repo_root.join(VAULT_FILE);
@@ -77,26 +78,24 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
 /// Decrypt .context/vault.age back into sessions/ + LEARNINGS.md.
 pub fn run_unlock(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     let vault_path = repo_root.join(VAULT_FILE);
-    anyhow::ensure!(
-        vault_path.is_file(),
-        "{} not found. Ask the repo owner to run `memex share`.",
-        VAULT_FILE
-    );
-
-    let encrypted =
-        fs::read(&vault_path).with_context(|| format!("read {}", vault_path.display()))?;
-
-    // Get passphrase
-    let passphrase = match passphrase {
-        Some(p) => p,
-        None => prompt_passphrase_once()?,
+    let encrypted = if vault_path.is_file() {
+        fs::read(&vault_path).with_context(|| format!("read {}", vault_path.display()))?
+    } else {
+        // Fall back to git history so teammates can unlock by just providing the repo
+        // and passphrase, even if vault.age isn't checked out on the current branch.
+        read_git_file(repo_root, VAULT_FILE)?
     };
 
+    // Get passphrase
+    let (passphrase, default_used) = passphrase_or_default(passphrase);
+    if default_used {
+        eprintln!(
+            "warning: using default passphrase (weak). Pass --passphrase if a custom one was used."
+        );
+    }
+
     // Decrypt
-    let secret = SecretString::from(passphrase);
-    let identity = age::scrypt::Identity::new(secret);
-    let plaintext = age::decrypt(&identity, &encrypted)
-        .map_err(|e| anyhow::anyhow!("decryption failed (wrong passphrase?): {e}"))?;
+    let plaintext = decrypt_bytes(&passphrase, &encrypted)?;
 
     // Deserialize
     let archive: BTreeMap<String, String> =
@@ -119,6 +118,26 @@ pub fn run_unlock(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
 
     println!("Unlocked {} file(s) from vault.", count);
     Ok(())
+}
+
+pub fn passphrase_or_default(passphrase: Option<String>) -> (String, bool) {
+    match passphrase {
+        Some(p) if !p.is_empty() => (p, false),
+        _ => (DEFAULT_PASSPHRASE.to_string(), true),
+    }
+}
+
+pub fn encrypt_bytes(passphrase: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+    let secret = SecretString::from(passphrase.to_string());
+    let recipient = age::scrypt::Recipient::new(secret.clone());
+    age::encrypt(&recipient, plaintext).map_err(|e| anyhow::anyhow!("encryption failed: {e}"))
+}
+
+pub fn decrypt_bytes(passphrase: &str, encrypted: &[u8]) -> Result<Vec<u8>> {
+    let secret = SecretString::from(passphrase.to_string());
+    let identity = age::scrypt::Identity::new(secret);
+    age::decrypt(&identity, encrypted)
+        .map_err(|e| anyhow::anyhow!("decryption failed (wrong passphrase?): {e}"))
 }
 
 fn safe_context_join(context_dir: &Path, rel_path: &str) -> Result<PathBuf> {
@@ -146,24 +165,34 @@ fn safe_context_join(context_dir: &Path, rel_path: &str) -> Result<PathBuf> {
     Ok(out)
 }
 
-fn prompt_passphrase_twice() -> Result<String> {
-    let p1 = rpassword::prompt_password("Passphrase: ").context("read passphrase")?;
-    if p1.is_empty() {
-        anyhow::bail!("passphrase cannot be empty");
+fn read_git_file(repo_root: &Path, rel_path: &str) -> Result<Vec<u8>> {
+    // Find the most recent commit (across all refs) that contains the file.
+    let output = Command::new("git")
+        .args(["log", "--all", "-n", "1", "--format=%H", "--", rel_path])
+        .current_dir(repo_root)
+        .output()
+        .with_context(|| format!("run git log --all -- {rel_path}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{} not found on disk, and git log failed. Ask the repo owner to run `memex share`.",
+            rel_path
+        );
     }
-    let p2 = rpassword::prompt_password("Confirm passphrase: ").context("read passphrase")?;
-    if p1 != p2 {
-        anyhow::bail!("passphrases do not match");
-    }
-    Ok(p1)
-}
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    anyhow::ensure!(
+        !sha.is_empty(),
+        "{} not found. Ask the repo owner to run `memex share`.",
+        rel_path
+    );
 
-fn prompt_passphrase_once() -> Result<String> {
-    let p = rpassword::prompt_password("Passphrase: ").context("read passphrase")?;
-    if p.is_empty() {
-        anyhow::bail!("passphrase cannot be empty");
-    }
-    Ok(p)
+    let spec = format!("{sha}:{rel_path}");
+    let output = Command::new("git")
+        .args(["show", &spec])
+        .current_dir(repo_root)
+        .output()
+        .with_context(|| format!("run git show {spec}"))?;
+    anyhow::ensure!(output.status.success(), "git show failed for {spec}");
+    Ok(output.stdout)
 }
 
 /// Add gitignore entries so raw sessions and LEARNINGS.md are not committed,

@@ -1,8 +1,11 @@
+use crate::aliases;
 use crate::detect;
 use crate::types::DetectedAgents;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
 
 const COMPACT_PROMPT: &str = r#"You are compacting a conversation to preserve what is needed to continue work.
 
@@ -46,7 +49,8 @@ Run `memex sync` if sessions look stale.
 "#;
 
 pub fn run_init(repo_root: &Path) -> Result<()> {
-    let agents = detect::detect_agents(repo_root);
+    let repo_roots = aliases::load_repo_roots(repo_root);
+    let agents = detect::detect_agents(&repo_roots);
     if !agents.any() {
         println!("No agent history found for this repo. Creating .context/ anyway.");
     }
@@ -62,6 +66,9 @@ pub fn run_init(repo_root: &Path) -> Result<()> {
     if !gitkeep.exists() {
         fs::write(&gitkeep, "")?;
     }
+
+    // Local-only: track repo-root aliases so sync works across renames/moves.
+    let _ = aliases::ensure_current_repo_roots(repo_root)?;
 
     // 2. Write compact prompt
     let compact_path = context_dir.join("compact_prompt.md");
@@ -212,11 +219,10 @@ fi
 const POST_COMMIT_HOOK_MARKER: &str = "# memex post-commit hook";
 
 fn install_git_hook(repo_root: &Path) -> Result<()> {
-    let hooks_dir = repo_root.join(".git/hooks");
-    if !hooks_dir.is_dir() {
+    let Some(hooks_dir) = git_hooks_dir(repo_root) else {
         println!("  skip git hooks (not a git repo or .git/hooks missing)");
         return Ok(());
-    }
+    };
 
     install_single_hook(&hooks_dir, "post-checkout", HOOK_SCRIPT, HOOK_MARKER)?;
 
@@ -228,6 +234,34 @@ fn install_git_hook(repo_root: &Path) -> Result<()> {
     )?;
 
     Ok(())
+}
+
+fn git_hooks_dir(repo_root: &Path) -> Option<PathBuf> {
+    // Use git to resolve the real hooks dir (works with worktrees).
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", "hooks"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let rel = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if rel.is_empty() {
+        return None;
+    }
+
+    let p = PathBuf::from(rel);
+    let hooks_dir = if p.is_absolute() {
+        p
+    } else {
+        repo_root.join(p)
+    };
+    if hooks_dir.is_dir() {
+        Some(hooks_dir)
+    } else {
+        None
+    }
 }
 
 fn install_single_hook(

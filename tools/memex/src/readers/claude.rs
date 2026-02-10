@@ -10,24 +10,23 @@ use std::path::Path;
 /// Checks both ~/.claude/projects/ (per-project session files) and
 /// ~/.claude/history.jsonl (global history).
 pub fn read_sessions(
-    repo_root: &Path,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     _quiet: bool,
 ) -> Result<Vec<Session>> {
     let mut sessions: HashMap<String, Session> = HashMap::new();
-    let repo_str = repo_root.to_string_lossy().to_string();
 
     // 1. Read per-project session files from ~/.claude/projects/
     if let Some(projects_dir) = crate::detect::claude_projects_dir() {
         if projects_dir.is_dir() {
-            read_projects_dir(&projects_dir, &repo_str, cutoff, &mut sessions)?;
+            read_projects_dir(&projects_dir, repo_roots, cutoff, &mut sessions)?;
         }
     }
 
     // 2. Read global history as fallback
     if let Some(history_path) = crate::detect::claude_history_path() {
         if history_path.is_file() {
-            read_history_file(&history_path, &repo_str, cutoff, &mut sessions)?;
+            read_history_file(&history_path, repo_roots, cutoff, &mut sessions)?;
         }
     }
 
@@ -36,7 +35,7 @@ pub fn read_sessions(
 
 fn read_projects_dir(
     projects_dir: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
@@ -53,7 +52,7 @@ fn read_projects_dir(
             if path.extension().is_none_or(|e| e != "jsonl") {
                 continue;
             }
-            read_session_jsonl(&path, repo_str, cutoff, sessions)?;
+            read_session_jsonl(&path, repo_roots, cutoff, sessions)?;
         }
     }
     Ok(())
@@ -61,7 +60,7 @@ fn read_projects_dir(
 
 fn read_session_jsonl(
     path: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
@@ -92,7 +91,7 @@ fn read_session_jsonl(
 
         // Filter by repo
         let cwd = match &parsed.project_context {
-            Some(c) if c.starts_with(repo_str) => c.clone(),
+            Some(c) if crate::aliases::matches_any_root(c, repo_roots) => c.clone(),
             _ => continue,
         };
 
@@ -155,7 +154,7 @@ fn read_session_jsonl(
 
 fn read_history_file(
     path: &Path,
-    repo_str: &str,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     sessions: &mut HashMap<String, Session>,
 ) -> Result<()> {
@@ -183,7 +182,7 @@ fn read_history_file(
         };
 
         let cwd = match &parsed.project_context {
-            Some(c) if c.starts_with(repo_str) => c.clone(),
+            Some(c) if crate::aliases::matches_any_root(c, repo_roots) => c.clone(),
             _ => continue,
         };
 
