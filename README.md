@@ -15,10 +15,10 @@ Both tools are local-first. You decide what (if anything) to commit or share.
 
 ```bash
 # Install memex (per-repo context layer)
-cargo install --git https://github.com/strangeloopcanon/contrail --package memex --bin memex
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
 
 # Install contrail CLI (history import + cross-machine export/merge)
-cargo install --git https://github.com/strangeloopcanon/contrail --package contrail --bin contrail
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli --bin contrail
 
 # Optional backward-compatible binary name
 cargo install --git https://github.com/strangeloopcanon/contrail --package importer --bin importer
