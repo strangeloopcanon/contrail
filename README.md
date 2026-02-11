@@ -134,9 +134,39 @@ Logging:
 - **Redaction is best-effort:** current patterns cover common API keys/tokens, JWT-like strings, and emails. Treat logs and `.context/` as sensitive anyway.
 - **Encrypted sharing (optional):** `memex share` encrypts `.context/sessions/*.md` and `.context/LEARNINGS.md` into `.context/vault.age` for committing/sharing; `memex unlock` decrypts locally.
 
+## Cross-Machine Merge
+
+If you use contrail on multiple computers, each machine builds its own master log. The `importer` tool can export from one and merge into another.
+
+**On machine A** (the one you want to export from):
+
+```bash
+# Export everything
+importer export-log -o ~/Desktop/contrail-export.jsonl
+
+# Or filter: only events after a date, or from a specific tool
+importer export-log -o ~/Desktop/contrail-export.jsonl --after 2026-01-01T00:00:00Z --tool cursor
+```
+
+**Transfer the file** to machine B however you like (AirDrop, USB, shared folder, etc.).
+
+**On machine B** (stop the daemon first to avoid write conflicts):
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.contrail.daemon.plist
+importer merge-log ~/Desktop/contrail-export.jsonl
+launchctl load ~/Library/LaunchAgents/com.contrail.daemon.plist
+```
+
+`importer merge-log` now checks `com.contrail.daemon` and exits early if it appears to be running. You can bypass that guard with `--allow-daemon-running`, but only do that if you intentionally accept append-order risk.
+
+Merge deduplicates in two passes: first by `event_id` UUID, then by a content fingerprint that catches the same underlying event ingested independently on both machines (e.g. if both ran `import-history` from the same Codex/Claude files). Re-running merge with the same file is safe — it's idempotent.
+
+For **per-repo session sharing** (`.context/sessions/`), use the existing memex workflow instead: `memex share` on one machine, commit the vault, `memex unlock` on the other. See the memex README for details.
+
 ## Related Tools In This Workspace
 
-- `importer`: manual historical import (`cargo run -p importer`)
+- `importer`: history import + cross-machine export/merge (`cargo run -p importer -- --help`)
 - `exporter`: writes a trimmed dataset (`cargo run -p exporter`)
 - `wrapup`: generates an "AI year in code" report (`cargo run -p wrapup`)
 - `analysis`: local UI for browsing/scoring/probing sessions (`cargo run -p analysis`)

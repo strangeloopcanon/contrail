@@ -26,9 +26,9 @@ impl LogWriter {
                     .with_context(|| format!("failed to open log file at {:?}", log_path))?;
 
                 while let Some(log) = receiver.recv().await {
-                    let line = serde_json::to_string(&log)?;
-                    file.write_all(line.as_bytes()).await?;
-                    file.write_all(b"\n").await?;
+                    let mut line = serde_json::to_vec(&log)?;
+                    line.push(b'\n');
+                    file.write_all(&line).await?;
                 }
                 Ok::<_, anyhow::Error>(())
             }
