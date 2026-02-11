@@ -16,8 +16,11 @@ use tower_http::cors::CorsLayer;
 #[tokio::main]
 async fn main() {
     // Determine log path
-    let home = dirs::home_dir().expect("Could not find home directory");
-    let log_path = home.join(".contrail/logs/master_log.jsonl");
+    let log_path = env::var("CONTRAIL_LOG_PATH")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".contrail/logs/master_log.jsonl")))
+        .expect("Could not resolve CONTRAIL_LOG_PATH or home directory");
 
     let app_state = Arc::new(AppState { log_path });
 
@@ -38,6 +41,9 @@ struct AppState {
     log_path: PathBuf,
 }
 
+const DEFAULT_ALL_LIMIT: usize = 5_000;
+const MAX_ALL_LIMIT: usize = 20_000;
+
 async fn index() -> Html<&'static str> {
     Html(include_str!("index.html"))
 }
@@ -51,7 +57,11 @@ async fn get_logs(
     let session_filter = query.session_id.clone();
 
     if query.all.unwrap_or(false) {
-        return Json(load_all_logs(&state.log_path, tool_filter, session_filter).await);
+        let all_limit = query
+            .limit
+            .unwrap_or(DEFAULT_ALL_LIMIT)
+            .clamp(1, MAX_ALL_LIMIT);
+        return Json(load_all_logs(&state.log_path, all_limit, tool_filter, session_filter).await);
     }
 
     let log_path = state.log_path.clone();
@@ -65,6 +75,7 @@ async fn get_logs(
 
 async fn load_all_logs(
     path: &PathBuf,
+    limit: usize,
     tool_filter: Option<String>,
     session_filter: Option<String>,
 ) -> Vec<Value> {
@@ -73,7 +84,7 @@ async fn load_all_logs(
     };
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
-    let mut logs = Vec::new();
+    let mut logs: VecDeque<Value> = VecDeque::with_capacity(limit.min(MAX_ALL_LIMIT));
 
     while let Ok(Some(line)) = lines.next_line().await {
         let Ok(json) = serde_json::from_str::<Value>(&line) else {
@@ -82,10 +93,13 @@ async fn load_all_logs(
         if !matches_filters(&json, tool_filter.as_deref(), session_filter.as_deref()) {
             continue;
         }
-        logs.push(json);
+        logs.push_back(json);
+        if logs.len() > limit {
+            let _ = logs.pop_front();
+        }
     }
 
-    logs
+    logs.into_iter().collect()
 }
 
 fn load_tail_logs(

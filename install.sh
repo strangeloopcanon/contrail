@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 echo "✈️  Installing Contrail + memex..."
 
 # Check for Rust
@@ -8,33 +10,25 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
-# Build Release
-echo "📦 Building core_daemon..."
-cargo build --release -p core_daemon
-echo "📦 Building dashboard..."
-cargo build --release -p dashboard
-echo "📦 Building importer..."
-cargo build --release -p importer
-echo "📦 Building memex..."
-cargo build --release -p memex
+echo "📦 Installing memex..."
+cargo install --path tools/memex --locked --force
+echo "📦 Installing contrail CLI..."
+cargo install --path tools/contrail --locked --force
+echo "📦 Installing importer (backward-compatible command)..."
+cargo install --path importer --bin importer --locked --force
+echo "📦 Installing core_daemon..."
+cargo install --path core_daemon --locked --force
+echo "📦 Installing dashboard..."
+cargo install --path dashboard --locked --force
+echo "📦 Installing analysis..."
+cargo install --path analysis --locked --force
 
-if [ $? -eq 0 ]; then
-    echo "✅ Build successful!"
-    echo ""
-    echo "Contrail (telemetry daemon):"
-    echo "  ./target/release/core_daemon"
-    echo ""
-    echo "Dashboard:"
-    echo "  ./target/release/dashboard"
-    echo "  (Then open http://localhost:3000)"
-    echo ""
-    echo "memex (context layer):"
-    echo "  ./target/release/memex init     # in any repo"
-    echo "  ./target/release/memex sync     # pull session transcripts"
-    echo ""
-    echo "Import History:"
-    echo "  ./target/release/importer"
-else
-    echo "❌ Build failed."
-    exit 1
-fi
+echo "✅ Install successful!"
+echo ""
+echo "Installed commands:"
+echo "  contrail    # history import + cross-machine export/merge"
+echo "  importer    # same CLI as contrail (backward-compatible name)"
+echo "  core_daemon # background capture"
+echo "  dashboard   # local log UI"
+echo "  analysis    # deeper local analysis UI"
+echo "  memex       # per-repo context sync/share"

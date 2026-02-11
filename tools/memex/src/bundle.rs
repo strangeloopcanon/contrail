@@ -24,6 +24,13 @@ pub fn run_share_session(
     );
 
     let session_path = safe_sessions_join(&sessions_dir, session_filename)?;
+    if let Ok(meta) = fs::symlink_metadata(&session_path) {
+        anyhow::ensure!(
+            !meta.file_type().is_symlink(),
+            "refusing to read symlinked session file: {}",
+            session_path.display()
+        );
+    }
     anyhow::ensure!(
         session_path.is_file(),
         "session not found: .context/sessions/{} (run `memex sync` first)",
@@ -55,12 +62,7 @@ pub fn run_share_session(
     );
 
     let plaintext = serde_json::to_vec(&archive).context("serialize bundle")?;
-    let (passphrase, default_used) = share::passphrase_or_default(passphrase);
-    if default_used {
-        eprintln!(
-            "warning: using default passphrase (weak). Pass --passphrase for real encryption."
-        );
-    }
+    let passphrase = share::require_passphrase(passphrase, "memex share-session")?;
     let encrypted = share::encrypt_bytes(&passphrase, &plaintext)?;
 
     let out_rel = format!("{BUNDLES_DIR}/{id}.age");
@@ -73,9 +75,7 @@ pub fn run_share_session(
     println!();
     println!("Import in another repo:");
     println!("  memex import {}", id);
-    if !default_used {
-        println!("  (use the same --passphrase you encrypted with)");
-    }
+    println!("  (use the same --passphrase you encrypted with)");
     println!();
     println!("To share via git:");
     println!("  git add {}", out_rel);
@@ -105,12 +105,7 @@ pub fn run_import(repo_root: &Path, id: &str, passphrase: Option<String>) -> Res
         read_git_file(repo_root, &bundles_rel)?
     };
 
-    let (passphrase, default_used) = share::passphrase_or_default(passphrase);
-    if default_used {
-        eprintln!(
-            "warning: using default passphrase (weak). Pass --passphrase if a custom one was used."
-        );
-    }
+    let passphrase = share::require_passphrase(passphrase, "memex import")?;
     let plaintext = share::decrypt_bytes(&passphrase, &encrypted)?;
 
     let archive: BTreeMap<String, String> =
@@ -153,6 +148,7 @@ pub fn run_import(repo_root: &Path, id: &str, passphrase: Option<String>) -> Res
         };
 
         let out_path = sessions_dir.join(&out_name);
+        ensure_safe_session_write_target(&sessions_dir, &out_path)?;
         fs::write(&out_path, v).with_context(|| format!("write {}", out_path.display()))?;
         existing.insert(out_name);
         imported += 1;
@@ -196,6 +192,9 @@ fn list_existing_sessions(dir: &Path) -> Result<HashSet<String>> {
     }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
         if let Some(name) = entry.file_name().to_str() {
             if name.ends_with(".md") {
                 names.insert(name.to_string());
@@ -203,6 +202,29 @@ fn list_existing_sessions(dir: &Path) -> Result<HashSet<String>> {
         }
     }
     Ok(names)
+}
+
+fn ensure_safe_session_write_target(sessions_dir: &Path, out_path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        out_path.starts_with(sessions_dir),
+        "refusing to write outside sessions dir: {}",
+        out_path.display()
+    );
+    if let Ok(meta) = fs::symlink_metadata(sessions_dir) {
+        anyhow::ensure!(
+            !meta.file_type().is_symlink(),
+            "refusing symlinked sessions dir: {}",
+            sessions_dir.display()
+        );
+    }
+    if let Ok(meta) = fs::symlink_metadata(out_path) {
+        anyhow::ensure!(
+            !meta.file_type().is_symlink(),
+            "refusing to write to symlinked session target: {}",
+            out_path.display()
+        );
+    }
+    Ok(())
 }
 
 fn safe_sessions_join(sessions_dir: &Path, rel_path: &str) -> Result<PathBuf> {

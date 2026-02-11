@@ -102,7 +102,6 @@ memex search "TODO" --files
 Encrypt a single session transcript into a portable bundle under `.context/bundles/`.
 
 ```bash
-memex share-session 2026-02-10T12-00-00_codex-cli_abc123.md
 memex share-session 2026-02-10T12-00-00_codex-cli_abc123.md --passphrase "..."
 ```
 
@@ -163,8 +162,7 @@ The prompt teaches the agent to preserve search keys pointing back to `.context/
 Encrypts session transcripts and LEARNINGS.md into a single file (`.context/vault.age`) for sharing via git.
 
 ```bash
-memex share                        # uses a weak built-in passphrase by default
-memex share --passphrase "..."     # recommended: use a real passphrase
+memex share --passphrase "..."
 ```
 
 What it does:
@@ -180,7 +178,6 @@ Run it again after `memex sync` to re-encrypt with new sessions.
 Decrypts `.context/vault.age` back into readable sessions and learnings.
 
 ```bash
-memex unlock                       # uses a weak built-in passphrase by default
 memex unlock --passphrase "..."    # use the same passphrase used for `memex share`
 ```
 
@@ -202,7 +199,7 @@ memex lives in the [Contrail](../../README.md) workspace and shares its session 
 From the Contrail workspace:
 
 ```bash
-cargo install --path tools/memex
+cargo install --path tools/memex --locked
 ```
 
 Or build with everything else:

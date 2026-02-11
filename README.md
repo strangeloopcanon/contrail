@@ -15,18 +15,21 @@ Both tools are local-first. You decide what (if anything) to commit or share.
 
 ```bash
 # Install memex (per-repo context layer)
-cargo install --git https://github.com/strangeloopcanon/contrail memex
+cargo install --git https://github.com/strangeloopcanon/contrail --package memex --bin memex
 
-# Install the flight recorder daemon
-cargo install --git https://github.com/strangeloopcanon/contrail core_daemon
+# Install contrail CLI (history import + cross-machine export/merge)
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail --bin contrail
 
-# Optional: dashboard, importer, analysis
-cargo install --git https://github.com/strangeloopcanon/contrail dashboard
-cargo install --git https://github.com/strangeloopcanon/contrail importer
-cargo install --git https://github.com/strangeloopcanon/contrail analysis
+# Optional backward-compatible binary name
+cargo install --git https://github.com/strangeloopcanon/contrail --package importer --bin importer
+
+# Install the flight recorder daemon + UIs
+cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon --bin core_daemon
+cargo install --git https://github.com/strangeloopcanon/contrail --package dashboard --bin dashboard
+cargo install --git https://github.com/strangeloopcanon/contrail --package analysis --bin analysis
 ```
 
-Or build everything locally:
+Or install everything locally in one command:
 
 ```bash
 ./install.sh
@@ -142,10 +145,10 @@ If you use contrail on multiple computers, each machine builds its own master lo
 
 ```bash
 # Export everything
-importer export-log -o ~/Desktop/contrail-export.jsonl
+contrail export-log -o ~/Desktop/contrail-export.jsonl
 
 # Or filter: only events after a date, or from a specific tool
-importer export-log -o ~/Desktop/contrail-export.jsonl --after 2026-01-01T00:00:00Z --tool cursor
+contrail export-log -o ~/Desktop/contrail-export.jsonl --after 2026-01-01T00:00:00Z --tool cursor
 ```
 
 **Transfer the file** to machine B however you like (AirDrop, USB, shared folder, etc.).
@@ -154,11 +157,11 @@ importer export-log -o ~/Desktop/contrail-export.jsonl --after 2026-01-01T00:00:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.contrail.daemon.plist
-importer merge-log ~/Desktop/contrail-export.jsonl
+contrail merge-log ~/Desktop/contrail-export.jsonl
 launchctl load ~/Library/LaunchAgents/com.contrail.daemon.plist
 ```
 
-`importer merge-log` now checks `com.contrail.daemon` and exits early if it appears to be running. You can bypass that guard with `--allow-daemon-running`, but only do that if you intentionally accept append-order risk.
+`contrail merge-log` now checks `com.contrail.daemon` and exits early if it appears to be running.
 
 Merge deduplicates in two passes: first by `event_id` UUID, then by a content fingerprint that catches the same underlying event ingested independently on both machines (e.g. if both ran `import-history` from the same Codex/Claude files). Re-running merge with the same file is safe — it's idempotent.
 
@@ -166,7 +169,7 @@ For **per-repo session sharing** (`.context/sessions/`), use the existing memex 
 
 ## Related Tools In This Workspace
 
-- `importer`: history import + cross-machine export/merge (`cargo run -p importer -- --help`)
+- `contrail`/`importer`: history import + cross-machine export/merge (`cargo run -p importer -- --help`)
 - `exporter`: writes a trimmed dataset (`cargo run -p exporter`)
 - `wrapup`: generates an "AI year in code" report (`cargo run -p wrapup`)
 - `analysis`: local UI for browsing/scoring/probing sessions (`cargo run -p analysis`)

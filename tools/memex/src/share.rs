@@ -6,7 +6,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const VAULT_FILE: &str = ".context/vault.age";
-pub const DEFAULT_PASSPHRASE: &str = "pa$$word";
 
 /// Encrypt .context/sessions/ + LEARNINGS.md into .context/vault.age.
 pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
@@ -25,6 +24,10 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     if sessions_dir.is_dir() {
         for entry in fs::read_dir(&sessions_dir)? {
             let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if name_str.ends_with(".md") {
@@ -37,7 +40,11 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
 
     // LEARNINGS.md
     let learnings_path = context_dir.join("LEARNINGS.md");
-    if learnings_path.is_file() {
+    if learnings_path.is_file()
+        && fs::symlink_metadata(&learnings_path)
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(false)
+    {
         let content = fs::read_to_string(&learnings_path)?;
         archive.insert("LEARNINGS.md".to_string(), content);
     }
@@ -50,13 +57,7 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     // Serialize to JSON
     let plaintext = serde_json::to_vec(&archive).context("serialize archive")?;
 
-    // Get passphrase
-    let (passphrase, default_used) = passphrase_or_default(passphrase);
-    if default_used {
-        eprintln!(
-            "warning: using default passphrase (weak). Pass --passphrase for real encryption."
-        );
-    }
+    let passphrase = require_passphrase(passphrase, "memex share")?;
 
     // Encrypt
     let encrypted = encrypt_bytes(&passphrase, &plaintext)?;
@@ -86,13 +87,7 @@ pub fn run_unlock(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
         read_git_file(repo_root, VAULT_FILE)?
     };
 
-    // Get passphrase
-    let (passphrase, default_used) = passphrase_or_default(passphrase);
-    if default_used {
-        eprintln!(
-            "warning: using default passphrase (weak). Pass --passphrase if a custom one was used."
-        );
-    }
+    let passphrase = require_passphrase(passphrase, "memex unlock")?;
 
     // Decrypt
     let plaintext = decrypt_bytes(&passphrase, &encrypted)?;
@@ -108,7 +103,11 @@ pub fn run_unlock(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
 
     let mut count = 0usize;
     for (rel_path, content) in &archive {
+        if !is_allowed_archive_path(rel_path) {
+            anyhow::bail!("refusing unsupported path from vault: {rel_path}");
+        }
         let out_path = safe_context_join(&context_dir, rel_path)?;
+        ensure_safe_context_write_target(&context_dir, &out_path)?;
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -120,10 +119,12 @@ pub fn run_unlock(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn passphrase_or_default(passphrase: Option<String>) -> (String, bool) {
+pub fn require_passphrase(passphrase: Option<String>, action: &str) -> Result<String> {
     match passphrase {
-        Some(p) if !p.is_empty() => (p, false),
-        _ => (DEFAULT_PASSPHRASE.to_string(), true),
+        Some(p) if !p.trim().is_empty() => Ok(p),
+        _ => {
+            anyhow::bail!("{action} requires --passphrase (empty/default passphrases are disabled)")
+        }
     }
 }
 
@@ -163,6 +164,46 @@ fn safe_context_join(context_dir: &Path, rel_path: &str) -> Result<PathBuf> {
         "refusing to write unsafe path from vault: {rel_path}"
     );
     Ok(out)
+}
+
+fn is_allowed_archive_path(rel_path: &str) -> bool {
+    rel_path == "LEARNINGS.md" || (rel_path.starts_with("sessions/") && rel_path.ends_with(".md"))
+}
+
+fn ensure_safe_context_write_target(context_dir: &Path, out_path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        out_path.starts_with(context_dir),
+        "refusing to write outside context dir: {}",
+        out_path.display()
+    );
+
+    let mut cur = context_dir.to_path_buf();
+    if let Ok(meta) = fs::symlink_metadata(&cur) {
+        anyhow::ensure!(
+            !meta.file_type().is_symlink(),
+            "refusing symlinked context dir: {}",
+            context_dir.display()
+        );
+    }
+
+    for comp in out_path
+        .strip_prefix(context_dir)
+        .context("path escaped context dir")?
+        .components()
+    {
+        if let Component::Normal(part) = comp {
+            cur.push(part);
+            if let Ok(meta) = fs::symlink_metadata(&cur) {
+                anyhow::ensure!(
+                    !meta.file_type().is_symlink(),
+                    "refusing symlink path in context dir: {}",
+                    cur.display()
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn read_git_file(repo_root: &Path, rel_path: &str) -> Result<Vec<u8>> {
@@ -234,7 +275,7 @@ fn update_gitignore_for_share(repo_root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_context_join;
+    use super::{require_passphrase, safe_context_join};
     use std::path::Path;
 
     #[test]
@@ -266,5 +307,17 @@ mod tests {
         let out = safe_context_join(context_dir, "sessions/2026-02-09.md").unwrap();
         let expected = context_dir.join("sessions").join("2026-02-09.md");
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn require_passphrase_rejects_missing() {
+        assert!(require_passphrase(None, "memex share").is_err());
+        assert!(require_passphrase(Some(String::new()), "memex share").is_err());
+    }
+
+    #[test]
+    fn require_passphrase_accepts_non_empty() {
+        let p = require_passphrase(Some("topsecret".to_string()), "memex share").unwrap();
+        assert_eq!(p, "topsecret");
     }
 }

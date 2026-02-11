@@ -6,11 +6,16 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
-    let home = dirs::home_dir().context("Could not find home directory")?;
-    let input = home.join(".contrail/logs/master_log.jsonl");
+    let input = std::env::var("CONTRAIL_LOG_PATH")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".contrail/logs/master_log.jsonl")))
+        .context("Could not resolve CONTRAIL_LOG_PATH or home directory")?;
     let output = PathBuf::from("export/curated_dataset.jsonl");
 
-    std::fs::create_dir_all(output.parent().unwrap())?;
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let reader = BufReader::new(File::open(&input)?);
     let mut writer = File::create(&output)?;
     let mut kept = 0usize;

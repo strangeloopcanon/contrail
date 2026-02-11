@@ -2,6 +2,6 @@
 members = [
     "core_daemon", "dashboard", "importer",
     "scrapers", "tools/exporter", "tools/wrapup", "analysis",
-    "tools/memex",
+    "tools/memex", "tools/contrail",
 ]
 resolver = "2"

@@ -6,6 +6,7 @@ use scrapers::watchers::Harvester;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task;
 use tracing::{error, info, warn};
 
@@ -43,66 +44,90 @@ async fn main() -> anyhow::Result<()> {
 
     let h1 = harvester.clone();
     let cursor_handle = task::spawn(async move {
-        if enable_cursor {
+        if !enable_cursor {
+            info!("cursor watcher disabled");
+            return;
+        }
+        loop {
             if let Err(e) = h1.run_cursor_watcher().await {
                 error!(err = ?e, "cursor watcher failed");
             }
+            warn!("cursor watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
     let h2 = harvester.clone();
     let codex_handle = task::spawn(async move {
-        if enable_codex {
+        if !enable_codex {
+            info!("codex watcher disabled");
+            return;
+        }
+        loop {
             if let Err(e) = h2.run_codex_watcher().await {
                 error!(err = ?e, "codex watcher failed");
             }
+            warn!("codex watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
     let h3 = harvester.clone();
     let antigravity_handle = task::spawn(async move {
-        if enable_antigravity {
+        if !enable_antigravity {
+            info!("antigravity watcher disabled");
+            return;
+        }
+        loop {
             if let Err(e) = h3.run_antigravity_watcher().await {
                 error!(err = ?e, "antigravity watcher failed");
             }
+            warn!("antigravity watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
     let h4 = harvester.clone();
     let claude_handle = task::spawn(async move {
-        if enable_claude {
+        if !enable_claude {
+            info!("claude watcher disabled");
+            return;
+        }
+        loop {
             if let Err(e) = h4.run_claude_watcher().await {
                 error!(err = ?e, "claude watcher failed");
             }
+            warn!("claude watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
     let h5 = harvester.clone();
     let claude_projects_handle = task::spawn(async move {
-        if enable_claude {
+        if !enable_claude {
+            return;
+        }
+        loop {
             if let Err(e) = h5.run_claude_projects_watcher().await {
                 error!(err = ?e, "claude projects watcher failed");
             }
+            warn!("claude projects watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
-    // Wait for either all tasks to complete or a shutdown signal
-    tokio::select! {
-        _ = async {
-            let _ = tokio::join!(
-                cursor_handle,
-                codex_handle,
-                antigravity_handle,
-                claude_handle,
-                claude_projects_handle
-            );
-        } => {
-            warn!("all watcher tasks exited unexpectedly");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            info!("received shutdown signal, stopping");
-        }
+    if !(enable_cursor || enable_codex || enable_antigravity || enable_claude) {
+        warn!("all watchers are disabled; daemon will stay idle until shutdown");
     }
+
+    tokio::signal::ctrl_c().await?;
+    info!("received shutdown signal, stopping");
+
+    cursor_handle.abort();
+    codex_handle.abort();
+    antigravity_handle.abort();
+    claude_handle.abort();
+    claude_projects_handle.abort();
 
     // Drop the harvester so its LogWriter sender drops,
     // which closes the channel and lets the background writer flush.

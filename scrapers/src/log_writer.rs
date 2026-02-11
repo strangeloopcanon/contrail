@@ -41,18 +41,10 @@ impl LogWriter {
         Self { sender }
     }
 
-    pub fn write(&self, log: MasterLog) -> Result<()> {
-        match self.sender.try_send(log) {
-            Ok(()) => Ok(()),
-            // Backpressure: drop the entry but keep the caller alive.
-            // The caller loops indefinitely; returning an error here would stop watchers.
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("log writer channel full, dropping entry");
-                Ok(())
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Err(anyhow::anyhow!("log writer channel closed"))
-            }
-        }
+    pub async fn write(&self, log: MasterLog) -> Result<()> {
+        self.sender
+            .send(log)
+            .await
+            .map_err(|_| anyhow::anyhow!("log writer channel closed"))
     }
 }
