@@ -1,0 +1,9 @@
+[package]
+name = "contrail"
+version = "0.1.0"
+edition = "2024"
+description = "Contrail CLI: history import and cross-machine export/merge"
+
+[dependencies]
+anyhow = "1.0"
+importer = { path = "../../importer" }

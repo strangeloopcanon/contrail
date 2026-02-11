@@ -36,6 +36,10 @@ impl Harvester {
             }
 
             if let Some(session_path) = latest_session {
+                let session_id = session_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown-session".to_string());
                 let task_md = session_path.join("task.md");
                 let plan_md = session_path.join("implementation_plan.md");
 
@@ -79,7 +83,7 @@ impl Harvester {
                                         if !buf.trim().is_empty() {
                                             self.log_interaction_with_metadata(
                                                 "antigravity",
-                                                session_path.file_name().unwrap().to_str().unwrap(),
+                                                &session_id,
                                                 "Antigravity Brain",
                                                 &buf,
                                                 "assistant",
@@ -112,7 +116,7 @@ impl Harvester {
                                         if !buf.trim().is_empty() {
                                             self.log_interaction_with_metadata(
                                                 "antigravity",
-                                                session_path.file_name().unwrap().to_str().unwrap(),
+                                                &session_id,
                                                 "Antigravity Brain",
                                                 &buf,
                                                 "assistant",

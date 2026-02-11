@@ -29,7 +29,10 @@ fn detect_cursor(home: &Path, repo_roots: &[String]) -> bool {
     for entry in entries.flatten() {
         let workspace_json = entry.path().join("workspace.json");
         if let Ok(content) = std::fs::read_to_string(&workspace_json) {
-            if repo_roots.iter().any(|r| content.contains(r)) {
+            if repo_roots
+                .iter()
+                .any(|r| contains_repo_reference(&content, r))
+            {
                 return true;
             }
         }
@@ -139,12 +142,46 @@ fn scan_jsonl_file_for_repo(path: &Path, repo_roots: &[String], max_lines: usize
             break;
         }
         if let Ok(line) = line {
-            if repo_roots.iter().any(|r| line.contains(r)) {
+            if repo_roots.iter().any(|r| contains_repo_reference(&line, r)) {
                 return true;
             }
         }
     }
     false
+}
+
+fn contains_repo_reference(haystack: &str, repo_root: &str) -> bool {
+    if repo_root.is_empty() {
+        return false;
+    }
+
+    let mut start = 0usize;
+    while start < haystack.len() {
+        let Some(rel_idx) = haystack[start..].find(repo_root) else {
+            break;
+        };
+        let idx = start + rel_idx;
+        let before = haystack[..idx].chars().next_back();
+        let after_idx = idx + repo_root.len();
+        let after = haystack[after_idx..].chars().next();
+        if is_left_boundary(before) && is_right_boundary(after) {
+            return true;
+        }
+        start = idx + 1;
+    }
+    false
+}
+
+fn is_left_boundary(c: Option<char>) -> bool {
+    c.is_none_or(|ch| !is_path_char(ch))
+}
+
+fn is_right_boundary(c: Option<char>) -> bool {
+    c.is_none_or(|ch| ch == '/' || ch == '\\' || !is_path_char(ch))
+}
+
+fn is_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')
 }
 
 /// Get standard storage paths for reference.
@@ -162,4 +199,28 @@ pub fn claude_projects_dir() -> Option<PathBuf> {
 
 pub fn claude_history_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude/history.jsonl"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_repo_reference;
+
+    #[test]
+    fn contains_repo_reference_matches_exact_or_child_path() {
+        let root = "/Users/alice/project";
+        assert!(contains_repo_reference("cwd:/Users/alice/project", root));
+        assert!(contains_repo_reference(
+            "cwd:/Users/alice/project/src/main.rs",
+            root
+        ));
+    }
+
+    #[test]
+    fn contains_repo_reference_rejects_prefix_overlap() {
+        let root = "/Users/alice/project";
+        assert!(!contains_repo_reference(
+            "cwd:/Users/alice/project-extra",
+            root
+        ));
+    }
 }

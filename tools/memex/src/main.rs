@@ -66,7 +66,7 @@ enum Commands {
     },
     /// Encrypt sessions + learnings into .context/vault.age for sharing via git
     Share {
-        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        /// Passphrase (required)
         #[arg(long)]
         passphrase: Option<String>,
     },
@@ -74,7 +74,7 @@ enum Commands {
     ShareSession {
         /// Session filename under .context/sessions/ (e.g. 2026-02-10T12-00-00_codex-cli_abc123.md)
         session: String,
-        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        /// Passphrase (required)
         #[arg(long)]
         passphrase: Option<String>,
     },
@@ -82,13 +82,13 @@ enum Commands {
     Import {
         /// Bundle ID (the filename stem under .context/bundles/, without extension)
         id: String,
-        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        /// Passphrase (required)
         #[arg(long)]
         passphrase: Option<String>,
     },
     /// Decrypt .context/vault.age back into sessions + learnings
     Unlock {
-        /// Passphrase (defaults to a weak built-in passphrase if omitted)
+        /// Passphrase (required)
         #[arg(long)]
         passphrase: Option<String>,
     },

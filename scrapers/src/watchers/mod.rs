@@ -92,7 +92,7 @@ impl Harvester {
         };
 
         log.validate_schema()?;
-        self.log_writer.write(log)?;
+        self.log_writer.write(log).await?;
         Ok(())
     }
 }

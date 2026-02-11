@@ -29,7 +29,7 @@ use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -38,6 +38,7 @@ struct AppState {
     memory_path: PathBuf,
     memory_blocks_path: PathBuf,
     data: Arc<RwLock<Dataset>>,
+    memory_io_lock: Arc<Mutex<()>>,
     llm: Option<llm::LlmClient>,
 }
 
@@ -191,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
         memory_path,
         memory_blocks_path,
         data: Arc::new(RwLock::new(initial_dataset)),
+        memory_io_lock: Arc::new(Mutex::new(())),
         llm: llm::LlmClient::from_env()?,
     };
 
@@ -464,11 +466,13 @@ async fn create_memory(
         llm_response: body.llm_response,
     };
 
+    let _guard = state.memory_io_lock.lock().await;
     append_memory(&state.memory_path, &record).map_err(ApiError::internal)?;
     Ok(Json(record))
 }
 
 async fn list_memories(State(state): State<AppState>) -> ApiResult<Json<models::MemoriesResponse>> {
+    let _guard = state.memory_io_lock.lock().await;
     let records = read_memories(&state.memory_path).map_err(ApiError::internal)?;
     Ok(Json(models::MemoriesResponse { memories: records }))
 }
@@ -507,6 +511,7 @@ async fn get_context_pack(
     }
 
     let memory_blocks = if include_memory_blocks {
+        let _guard = state.memory_io_lock.lock().await;
         let mut blocks =
             memory_blocks::read_blocks(&state.memory_blocks_path).map_err(ApiError::internal)?;
         blocks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -517,6 +522,7 @@ async fn get_context_pack(
     };
 
     let recent_memories = if include_memories && memory_limit > 0 {
+        let _guard = state.memory_io_lock.lock().await;
         let records = read_memories(&state.memory_path).map_err(ApiError::internal)?;
         context_pack::to_memory_snippets(records, memory_limit, day)
     } else {
@@ -549,6 +555,7 @@ async fn get_context_pack(
 }
 
 async fn list_memory_blocks(State(state): State<AppState>) -> ApiResult<Json<Vec<MemoryBlock>>> {
+    let _guard = state.memory_io_lock.lock().await;
     let blocks =
         memory_blocks::read_blocks(&state.memory_blocks_path).map_err(ApiError::internal)?;
     Ok(Json(blocks))
@@ -584,6 +591,7 @@ async fn create_memory_block(
         tags: body.tags,
     };
 
+    let _guard = state.memory_io_lock.lock().await;
     let created = memory_blocks::insert_block(&state.memory_blocks_path, block)
         .map_err(ApiError::internal)?;
     Ok(Json(created))
@@ -614,6 +622,7 @@ async fn update_memory_block(
         update.security_flags = Some(flags);
     }
 
+    let _guard = state.memory_io_lock.lock().await;
     let updated =
         memory_blocks::update_block(&state.memory_blocks_path, id, update).map_err(|e| {
             if e.to_string().contains("not found") {
@@ -630,6 +639,7 @@ async fn delete_memory_block(
     State(state): State<AppState>,
     Path(id): Path<uuid::Uuid>,
 ) -> ApiResult<StatusCode> {
+    let _guard = state.memory_io_lock.lock().await;
     memory_blocks::delete_block(&state.memory_blocks_path, id).map_err(|e| {
         if e.to_string().contains("not found") {
             ApiError::not_found(e)
@@ -670,6 +680,7 @@ async fn create_memory_with_llm(
         llm_response: Some(llm_response),
     };
 
+    let _guard = state.memory_io_lock.lock().await;
     append_memory(&state.memory_path, &record).map_err(ApiError::internal)?;
     Ok(Json(record))
 }
@@ -709,6 +720,7 @@ async fn run_default_autoprobes(
             prompt: Some(prompt),
             llm_response: Some(llm_response),
         };
+        let _guard = state.memory_io_lock.lock().await;
         append_memory(&state.memory_path, &record).map_err(ApiError::internal)?;
         records.push(record);
     }
