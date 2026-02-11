@@ -1669,6 +1669,8 @@ name = "importer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "clap",
  "scrapers",
  "tracing-subscriber",
 ]
@@ -2882,6 +2884,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

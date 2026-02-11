@@ -5,6 +5,7 @@ pub mod cursor;
 pub mod history_import;
 pub mod learnings;
 pub mod log_writer;
+pub mod merge;
 pub mod notifier;
 pub mod parse;
 pub mod sentry;
