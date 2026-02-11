@@ -202,6 +202,12 @@ From the Contrail workspace:
 cargo install --path tools/memex --locked
 ```
 
+From crates.io:
+
+```bash
+cargo install contrail-memex --bin memex
+```
+
 Or build with everything else:
 
 ```bash
