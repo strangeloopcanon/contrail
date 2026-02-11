@@ -1,3 +1,4 @@
+use crate::aliases;
 use crate::detect;
 use crate::readers;
 use crate::render;
@@ -16,7 +17,8 @@ pub fn run_sync(repo_root: &Path, max_age_days: u64, quiet: bool) -> Result<()> 
         anyhow::bail!(".context/sessions/ not found. Run `memex init` first.");
     }
 
-    let agents = detect::detect_agents(repo_root);
+    let repo_roots = aliases::ensure_current_repo_roots(repo_root)?;
+    let agents = detect::detect_agents(&repo_roots);
     if !agents.any() {
         if !quiet {
             println!("No agent sessions found for this repo.");
@@ -28,7 +30,7 @@ pub fn run_sync(repo_root: &Path, max_age_days: u64, quiet: bool) -> Result<()> 
     let mut existing = list_existing_sessions(&sessions_dir)?;
 
     // Read sessions from all detected agents
-    let sessions = readers::read_all_sessions(repo_root, &agents, max_age_days, quiet);
+    let sessions = readers::read_all_sessions(&repo_roots, &agents, max_age_days, quiet);
 
     let mut written = 0usize;
     let mut skipped = 0usize;

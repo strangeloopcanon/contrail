@@ -47,6 +47,7 @@ What it writes depends on which agents have been used in this repo (auto-detecte
 Also writes:
 - `.context/compact_prompt.md` -- a compaction policy that teaches agents to compress context while leaving search keys pointing back to `.context/sessions/`
 - `.context/LEARNINGS.md` -- a shared file where agents append decisions, pitfalls, and patterns
+- A local-only repo-root alias list under `.context/.memex/` so renames/moves don't break `memex sync` (gitignored via `.git/info/exclude`)
 
 Idempotent: won't overwrite existing files.
 
@@ -60,6 +61,8 @@ memex sync --days 90    # last 90 days
 ```
 
 Skips sessions that are already synced (by filename). Secrets are redacted before writing.
+
+If you move/rename the repo folder, `memex sync` automatically records the new repo root locally and continues matching old sessions from agent storage.
 
 ### `memex link-commit`
 
@@ -94,6 +97,22 @@ memex search "panic" --days 7
 memex search "TODO" --files
 ```
 
+### `memex share-session <session.md>`
+
+Encrypt a single session transcript into a portable bundle under `.context/bundles/`.
+
+```bash
+memex share-session 2026-02-10T12-00-00_codex-cli_abc123.md
+memex share-session 2026-02-10T12-00-00_codex-cli_abc123.md --passphrase "..."
+```
+
+This prints a short Bundle ID you can share. Teammates can import by ID:
+
+```bash
+memex import <bundle-id>
+memex import <bundle-id> --passphrase "..."
+```
+
 ### When does sync run?
 
 Three options, all compatible:
@@ -112,8 +131,12 @@ Three options, all compatible:
     2026-02-09T14-30_cursor.md
     2026-02-09T10-15_codex-cli.md
     2026-02-08T16-00_claude-code.md
+  bundles/
+    a3b2c4d5e6f7.age
   compact_prompt.md
   LEARNINGS.md
+  commits.jsonl
+  vault.age
 ```
 
 Each session file is plain markdown:
@@ -140,8 +163,8 @@ The prompt teaches the agent to preserve search keys pointing back to `.context/
 Encrypts session transcripts and LEARNINGS.md into a single file (`.context/vault.age`) for sharing via git.
 
 ```bash
-memex share                        # prompts for passphrase
-memex share --passphrase "..."     # non-interactive
+memex share                        # uses a weak built-in passphrase by default
+memex share --passphrase "..."     # recommended: use a real passphrase
 ```
 
 What it does:
@@ -157,8 +180,8 @@ Run it again after `memex sync` to re-encrypt with new sessions.
 Decrypts `.context/vault.age` back into readable sessions and learnings.
 
 ```bash
-memex unlock                       # prompts for passphrase
-memex unlock --passphrase "..."    # non-interactive
+memex unlock                       # uses a weak built-in passphrase by default
+memex unlock --passphrase "..."    # use the same passphrase used for `memex share`
 ```
 
 A teammate clones the repo, runs `memex unlock` with the passphrase, and gets the full session history locally. The vault.age file is standard age format, so it can also be decrypted with the `age` CLI (`age -d -o out.json vault.age`) if memex isn't installed.

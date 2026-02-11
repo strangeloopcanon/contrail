@@ -1,4 +1,4 @@
-use crate::{detect, readers};
+use crate::{aliases, detect, readers};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -116,13 +116,14 @@ fn find_active_sessions(
     commit_ts: DateTime<Utc>,
     commit_branch: &str,
 ) -> Result<Vec<String>> {
-    let agents = detect::detect_agents(repo_root);
+    let repo_roots = aliases::ensure_current_repo_roots(repo_root)?;
+    let agents = detect::detect_agents(&repo_roots);
     if !agents.any() {
         return Ok(Vec::new());
     }
 
     // Keep this tight: we only need sessions near the commit time.
-    let sessions = readers::read_all_sessions(repo_root, &agents, 3, true);
+    let sessions = readers::read_all_sessions(&repo_roots, &agents, 3, true);
     let mut selected = select_active_session_filenames(commit_ts, commit_branch, &sessions);
 
     // Fallback for older memex installs: if we couldn't infer any sessions from agent storage,

@@ -1,5 +1,5 @@
 use crate::link;
-use crate::{detect, readers};
+use crate::{aliases, detect, readers};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -130,14 +130,16 @@ fn short_sha(full: &str) -> String {
 }
 
 fn load_sessions_index(repo_root: &Path) -> HashMap<String, crate::types::Session> {
-    let agents = detect::detect_agents(repo_root);
+    let repo_roots = aliases::ensure_current_repo_roots(repo_root)
+        .unwrap_or_else(|_| aliases::load_repo_roots(repo_root));
+    let agents = detect::detect_agents(&repo_roots);
     if !agents.any() {
         return HashMap::new();
     }
 
     // Generous cutoff for ad-hoc explain runs; we only build this index when
     // the linked `.md` files are missing anyway.
-    let sessions = readers::read_all_sessions(repo_root, &agents, 30, true);
+    let sessions = readers::read_all_sessions(&repo_roots, &agents, 30, true);
     sessions.into_iter().map(|s| (s.filename(), s)).collect()
 }
 

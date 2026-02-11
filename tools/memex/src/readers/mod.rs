@@ -3,11 +3,10 @@ pub mod codex;
 pub mod cursor;
 
 use crate::types::Session;
-use std::path::Path;
 
 /// Read sessions from all available agents for a given repo.
 pub fn read_all_sessions(
-    repo_root: &Path,
+    repo_roots: &[String],
     agents: &crate::types::DetectedAgents,
     max_age_days: u64,
     quiet: bool,
@@ -22,7 +21,7 @@ pub fn read_all_sessions(
     }
 
     if agents.claude {
-        match claude::read_sessions(repo_root, &cutoff, quiet) {
+        match claude::read_sessions(repo_roots, &cutoff, quiet) {
             Ok(s) => sessions.extend(s),
             Err(e) => {
                 if !quiet {
@@ -33,7 +32,7 @@ pub fn read_all_sessions(
     }
 
     if agents.codex {
-        match codex::read_sessions(repo_root, &cutoff, quiet) {
+        match codex::read_sessions(repo_roots, &cutoff, quiet) {
             Ok(s) => sessions.extend(s),
             Err(e) => {
                 if !quiet {
@@ -44,7 +43,7 @@ pub fn read_all_sessions(
     }
 
     if agents.cursor {
-        match cursor::read_sessions(repo_root, &cutoff, quiet) {
+        match cursor::read_sessions(repo_roots, &cutoff, quiet) {
             Ok(s) => sessions.extend(s),
             Err(e) => {
                 if !quiet {

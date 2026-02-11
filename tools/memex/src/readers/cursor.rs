@@ -8,7 +8,7 @@ use std::path::Path;
 /// Finds the workspaceStorage directories that reference this repo, then
 /// extracts conversations from state.vscdb.
 pub fn read_sessions(
-    repo_root: &Path,
+    repo_roots: &[String],
     cutoff: &DateTime<Utc>,
     quiet: bool,
 ) -> Result<Vec<Session>> {
@@ -17,7 +17,6 @@ pub fn read_sessions(
         _ => return Ok(Vec::new()),
     };
 
-    let repo_str = repo_root.to_string_lossy().to_string();
     let mut sessions = Vec::new();
 
     let entries = std::fs::read_dir(&ws_storage)?;
@@ -29,13 +28,13 @@ pub fn read_sessions(
 
         // Check workspace.json for repo match
         let workspace_json = dir.join("workspace.json");
-        let matches = match std::fs::read_to_string(&workspace_json) {
-            Ok(content) => content.contains(&repo_str),
-            Err(_) => false,
+        let matched_root = match std::fs::read_to_string(&workspace_json) {
+            Ok(content) => repo_roots.iter().find(|r| content.contains(*r)).cloned(),
+            Err(_) => None,
         };
-        if !matches {
+        let Some(repo_str) = matched_root else {
             continue;
-        }
+        };
 
         // Read state.vscdb
         let db_path = dir.join("state.vscdb");
