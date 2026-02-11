@@ -2,6 +2,9 @@
 name = "scrapers"
 version = "0.1.0"
 edition = "2021"
+description = "Contrail scrapers and normalization library for local AI coding session logs"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 notify = "6.1.1"

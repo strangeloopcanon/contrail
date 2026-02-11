@@ -3,6 +3,8 @@ name = "contrail-memex"
 version = "0.1.0"
 edition = "2021"
 description = "Self-managed context layer for coding agents"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [[bin]]
 name = "memex"
