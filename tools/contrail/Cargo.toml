@@ -3,6 +3,8 @@ name = "contrail-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Contrail CLI: history import and cross-machine export/merge"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 anyhow = "1.0"
