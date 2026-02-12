@@ -6,9 +6,16 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const VAULT_FILE: &str = ".context/vault.age";
+const GITIGNORE_CONTEXT_HEADER: &str =
+    "# memex: raw sessions gitignored (vault.age is committed instead)";
+const GITIGNORE_CONTEXT_ENTRIES: [&str; 2] = [".context/sessions/*.md", ".context/LEARNINGS.md"];
 
 /// Encrypt .context/sessions/ + LEARNINGS.md into .context/vault.age.
-pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
+pub fn run_share(
+    repo_root: &Path,
+    passphrase: Option<String>,
+    passphrase_env: Option<String>,
+) -> Result<()> {
     let context_dir = repo_root.join(".context");
     let sessions_dir = context_dir.join("sessions");
 
@@ -57,7 +64,7 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     // Serialize to JSON
     let plaintext = serde_json::to_vec(&archive).context("serialize archive")?;
 
-    let passphrase = require_passphrase(passphrase, "memex share")?;
+    let passphrase = resolve_passphrase(passphrase, passphrase_env, "memex share")?;
 
     // Encrypt
     let encrypted = encrypt_bytes(&passphrase, &plaintext)?;
@@ -67,8 +74,10 @@ pub fn run_share(repo_root: &Path, passphrase: Option<String>) -> Result<()> {
     fs::write(&vault_path, &encrypted)
         .with_context(|| format!("write {}", vault_path.display()))?;
 
-    // Update .gitignore to hide raw files, keep vault committed
-    update_gitignore_for_share(repo_root)?;
+    // Keep raw context local-only by default.
+    if ensure_context_gitignore_rules(repo_root)? {
+        println!("Updated .gitignore (raw sessions excluded, vault.age committed).");
+    }
 
     println!("Encrypted {} file(s) → {}", archive.len(), VAULT_FILE);
     println!("Give the passphrase to teammates so they can run `memex unlock`.");
@@ -126,6 +135,32 @@ pub fn require_passphrase(passphrase: Option<String>, action: &str) -> Result<St
             anyhow::bail!("{action} requires --passphrase (empty/default passphrases are disabled)")
         }
     }
+}
+
+pub fn resolve_passphrase(
+    passphrase: Option<String>,
+    passphrase_env: Option<String>,
+    action: &str,
+) -> Result<String> {
+    if let Some(p) = passphrase {
+        if !p.trim().is_empty() {
+            return Ok(p);
+        }
+    }
+
+    if let Some(var_name) = passphrase_env {
+        let value = std::env::var(&var_name).with_context(|| {
+            format!(
+                "{action} requires --passphrase or --passphrase-env <VAR> (missing env var {var_name})"
+            )
+        })?;
+        if !value.trim().is_empty() {
+            return Ok(value);
+        }
+        anyhow::bail!("{action} received empty value from env var {var_name}");
+    }
+
+    anyhow::bail!("{action} requires --passphrase or --passphrase-env <VAR>")
 }
 
 pub fn encrypt_bytes(passphrase: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
@@ -236,47 +271,54 @@ fn read_git_file(repo_root: &Path, rel_path: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-/// Add gitignore entries so raw sessions and LEARNINGS.md are not committed,
-/// but vault.age and compact_prompt.md are.
-fn update_gitignore_for_share(repo_root: &Path) -> Result<()> {
+/// Ensure raw sessions and LEARNINGS.md are not committed by default.
+pub(crate) fn ensure_context_gitignore_rules(repo_root: &Path) -> Result<bool> {
     let gitignore_path = repo_root.join(".gitignore");
+    let existing = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path)?
+    } else {
+        String::new()
+    };
 
-    let lines_to_add = [
-        "# memex: raw sessions gitignored when using share (vault.age is committed instead)",
-        ".context/sessions/*.md",
-        ".context/LEARNINGS.md",
-    ];
+    let missing_entries: Vec<&str> = GITIGNORE_CONTEXT_ENTRIES
+        .iter()
+        .copied()
+        .filter(|entry| !existing.contains(entry))
+        .collect();
 
-    let marker = ".context/sessions/*.md";
+    if missing_entries.is_empty() {
+        return Ok(false);
+    }
 
-    if gitignore_path.exists() {
-        let existing = fs::read_to_string(&gitignore_path)?;
-        if existing.contains(marker) {
-            return Ok(());
-        }
-        let mut content = existing;
+    let mut content = existing;
+    if !content.is_empty() {
         if !content.ends_with('\n') {
             content.push('\n');
         }
         content.push('\n');
-        for line in &lines_to_add {
-            content.push_str(line);
-            content.push('\n');
-        }
-        fs::write(&gitignore_path, content)?;
-    } else {
-        let content = lines_to_add.join("\n") + "\n";
-        fs::write(&gitignore_path, content)?;
     }
 
-    println!("Updated .gitignore (raw sessions excluded, vault.age committed).");
-    Ok(())
+    if !content.contains(GITIGNORE_CONTEXT_HEADER) {
+        content.push_str(GITIGNORE_CONTEXT_HEADER);
+        content.push('\n');
+    }
+    for entry in missing_entries {
+        content.push_str(entry);
+        content.push('\n');
+    }
+    fs::write(&gitignore_path, content)?;
+
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{require_passphrase, safe_context_join};
-    use std::path::Path;
+    use super::{
+        ensure_context_gitignore_rules, require_passphrase, resolve_passphrase, safe_context_join,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn safe_context_join_rejects_absolute_paths() {
@@ -319,5 +361,55 @@ mod tests {
     fn require_passphrase_accepts_non_empty() {
         let p = require_passphrase(Some("topsecret".to_string()), "memex share").unwrap();
         assert_eq!(p, "topsecret");
+    }
+
+    #[test]
+    fn resolve_passphrase_accepts_inline_passphrase() {
+        let p = resolve_passphrase(Some("topsecret".to_string()), None, "memex share").unwrap();
+        assert_eq!(p, "topsecret");
+    }
+
+    #[test]
+    fn resolve_passphrase_rejects_missing_env_var() {
+        let err = resolve_passphrase(
+            None,
+            Some("MEMEX_TEST_MISSING_VAR".to_string()),
+            "memex share",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("missing env var MEMEX_TEST_MISSING_VAR"));
+    }
+
+    #[test]
+    fn ensure_context_gitignore_rules_adds_entries() {
+        let repo = create_temp_repo("gitignore-add");
+        let changed = ensure_context_gitignore_rules(&repo).unwrap();
+        assert!(changed);
+
+        let gitignore = fs::read_to_string(repo.join(".gitignore")).unwrap();
+        assert!(gitignore.contains(".context/sessions/*.md"));
+        assert!(gitignore.contains(".context/LEARNINGS.md"));
+
+        let changed_again = ensure_context_gitignore_rules(&repo).unwrap();
+        assert!(!changed_again);
+
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    fn create_temp_repo(label: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!(
+            "memex-share-tests-{}-{}-{}",
+            label,
+            std::process::id(),
+            stamp
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }
