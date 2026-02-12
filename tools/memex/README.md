@@ -5,7 +5,14 @@ Session context layer for coding agents. Syncs past session transcripts from Cur
 ## Quick start
 
 ```bash
-cargo install --path tools/memex
+# Stable release
+cargo install contrail-memex --bin memex
+
+# Or latest unreleased from GitHub main
+# cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
+
+# Or from a local clone of this repo
+# cargo install --path tools/memex --locked
 
 cd /path/to/your-project
 memex init
@@ -13,6 +20,7 @@ memex sync
 ```
 
 `memex init` creates `.context/sessions/`, detects which agents you've used in this repo, and wires them up (AGENTS.md, CLAUDE.md, .cursor/rules/, GEMINI.md) with a short instruction to check past sessions for context.
+It also hardens `.gitignore` so plaintext session files stay local by default.
 
 `memex sync` pulls recent transcripts from agent storage into `.context/sessions/` as readable markdown files. One file per session.
 
@@ -47,6 +55,7 @@ What it writes depends on which agents have been used in this repo (auto-detecte
 Also writes:
 - `.context/compact_prompt.md` -- a compaction policy that teaches agents to compress context while leaving search keys pointing back to `.context/sessions/`
 - `.context/LEARNINGS.md` -- a shared file where agents append decisions, pitfalls, and patterns
+- `.gitignore` entries for `.context/sessions/*.md` and `.context/LEARNINGS.md` (local plaintext only; share via `vault.age`)
 - A local-only repo-root alias list under `.context/.memex/` so renames/moves don't break `memex sync` (gitignored via `.git/info/exclude`)
 
 Idempotent: won't overwrite existing files.
@@ -118,7 +127,12 @@ Three options, all compatible:
 
 1. **The agent runs it.** The AGENTS.md instruction says "run `memex sync` if sessions look stale." Agents that can execute shell commands will do this.
 
-2. **A git hook.** If you ran `memex init`, `.git/hooks/post-checkout` is created/extended to run `memex sync --quiet` when you switch branches. Disable it with `MEMEX_HOOK=0` in your environment, or remove the memex block from `.git/hooks/post-checkout`.
+2. **Git hooks from `memex init`.**
+   - `post-checkout`: runs `memex sync --quiet` when you switch branches.
+   - `pre-commit`: blocks staged plaintext `.context/sessions/*.md` and `.context/LEARNINGS.md`.
+   - `post-commit`: records commit-to-session links with `memex link-commit --quiet`.
+   - Optional auto-share: set `MEMEX_PASSPHRASE` to have `pre-commit` run `memex share --passphrase-env MEMEX_PASSPHRASE` and stage `.context/vault.age`.
+   - Disable all memex hooks with `MEMEX_HOOK=0`.
 
 3. **Manually.** Just run `memex sync` whenever you want.
 
@@ -163,12 +177,14 @@ Encrypts session transcripts and LEARNINGS.md into a single file (`.context/vaul
 
 ```bash
 memex share --passphrase "..."
+# or read from env var
+MEMEX_PASSPHRASE="..." memex share --passphrase-env MEMEX_PASSPHRASE
 ```
 
 What it does:
 - Packs all `.context/sessions/*.md` + `.context/LEARNINGS.md` into JSON, encrypts with the passphrase using [age](https://age-encryption.org/) (scrypt KDF).
 - Writes `.context/vault.age`.
-- Adds `.context/sessions/*.md` and `.context/LEARNINGS.md` to `.gitignore` so only the encrypted vault gets committed.
+- Ensures `.context/sessions/*.md` and `.context/LEARNINGS.md` are in `.gitignore` so only the encrypted vault gets committed.
 - The compact prompt stays unencrypted and committed (it's a template, not session data).
 
 Run it again after `memex sync` to re-encrypt with new sessions.
@@ -187,8 +203,9 @@ A teammate clones the repo, runs `memex unlock` with the passphrase, and gets th
 
 - All data stays local. No network calls, no cloud, no accounts.
 - Secrets (API keys, tokens) are redacted before writing to `.context/sessions/`.
-- `.context/` is committed to git by default (so it syncs across devices). Add it to `.gitignore` if you want it local-only.
-- `memex share` encrypts sessions with a passphrase before committing. Only people with the passphrase can read them.
+- Plaintext `.context/sessions/*.md` and `.context/LEARNINGS.md` are gitignored by default after `memex init`.
+- Commit `.context/vault.age` for team sharing; teammates use `memex unlock` with the passphrase.
+- `memex share` encrypts sessions with a passphrase. Only people with the passphrase can read them.
 
 ## Part of Contrail
 
@@ -196,20 +213,20 @@ memex lives in the [Contrail](../../README.md) workspace and shares its session 
 
 ## Install
 
-From the Contrail workspace:
-
-```bash
-cargo install --path tools/memex --locked
-```
-
-From crates.io:
+From crates.io (stable):
 
 ```bash
 cargo install contrail-memex --bin memex
 ```
 
-Or build with everything else:
+From GitHub `main` (latest unreleased):
 
 ```bash
-./install.sh
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
+```
+
+From a local Contrail workspace:
+
+```bash
+cargo install --path tools/memex --locked
 ```

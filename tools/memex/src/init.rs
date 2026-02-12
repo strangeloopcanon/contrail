@@ -1,5 +1,6 @@
 use crate::aliases;
 use crate::detect;
+use crate::share;
 use crate::types::DetectedAgents;
 use anyhow::{Context, Result};
 use std::fs;
@@ -70,21 +71,28 @@ pub fn run_init(repo_root: &Path) -> Result<()> {
     // Local-only: track repo-root aliases so sync works across renames/moves.
     let _ = aliases::ensure_current_repo_roots(repo_root)?;
 
-    // 2. Write compact prompt
+    // 2. Secure-by-default: keep plaintext context out of commits.
+    if share::ensure_context_gitignore_rules(repo_root)? {
+        println!("  patched .gitignore (memex plaintext context excluded)");
+    } else {
+        println!("  skip .gitignore (memex plaintext context already excluded)");
+    }
+
+    // 3. Write compact prompt
     let compact_path = context_dir.join("compact_prompt.md");
     write_if_missing(&compact_path, COMPACT_PROMPT, "compact_prompt.md")?;
 
-    // 3. Write LEARNINGS.md
+    // 4. Write LEARNINGS.md
     let learnings_path = context_dir.join("LEARNINGS.md");
     write_if_missing(&learnings_path, LEARNINGS_HEADER, "LEARNINGS.md")?;
 
-    // 4. Write agent-specific files
+    // 5. Write agent-specific files
     write_agent_files(repo_root, &agents)?;
 
-    // 5. Install git hook
+    // 6. Install git hook
     install_git_hook(repo_root)?;
 
-    // 6. Summary
+    // 7. Summary
     print_summary(repo_root, &agents);
 
     Ok(())
@@ -218,6 +226,37 @@ fi
 
 const POST_COMMIT_HOOK_MARKER: &str = "# memex post-commit hook";
 
+const PRE_COMMIT_HOOK_SCRIPT: &str = r#"#!/bin/sh
+# memex pre-commit hook: block staged plaintext context files.
+# Disable with MEMEX_HOOK=0 in your environment.
+# Optional: set MEMEX_PASSPHRASE to refresh .context/vault.age before commit.
+
+if [ "${MEMEX_HOOK:-1}" = "0" ]; then
+    exit 0
+fi
+
+staged_plaintext="$(git diff --cached --name-only --diff-filter=ACMR -- .context/sessions .context/LEARNINGS.md 2>/dev/null | grep -E '^\.context/sessions/.*\.md$|^\.context/LEARNINGS\.md$' || true)"
+if [ -n "$staged_plaintext" ]; then
+    echo "memex: refusing commit with plaintext context staged:"
+    echo "$staged_plaintext" | sed 's/^/  - /'
+    echo "Remove these from the index; share .context/vault.age instead."
+    echo "Hint: git restore --staged .context/sessions/*.md .context/LEARNINGS.md"
+    echo "Then run: MEMEX_PASSPHRASE=\"...\" memex share --passphrase-env MEMEX_PASSPHRASE && git add .context/vault.age"
+    exit 1
+fi
+
+if [ -n "${MEMEX_PASSPHRASE:-}" ] && command -v memex >/dev/null 2>&1; then
+    if ! memex share --passphrase-env MEMEX_PASSPHRASE >/dev/null 2>&1; then
+        echo "memex: failed to refresh .context/vault.age in pre-commit."
+        echo "Run memex share manually or unset MEMEX_PASSPHRASE."
+        exit 1
+    fi
+    git add .context/vault.age >/dev/null 2>&1 || true
+fi
+"#;
+
+const PRE_COMMIT_HOOK_MARKER: &str = "# memex pre-commit hook";
+
 fn install_git_hook(repo_root: &Path) -> Result<()> {
     let Some(hooks_dir) = git_hooks_dir(repo_root) else {
         println!("  skip git hooks (not a git repo or .git/hooks missing)");
@@ -225,6 +264,12 @@ fn install_git_hook(repo_root: &Path) -> Result<()> {
     };
 
     install_single_hook(&hooks_dir, "post-checkout", HOOK_SCRIPT, HOOK_MARKER)?;
+    install_single_hook(
+        &hooks_dir,
+        "pre-commit",
+        PRE_COMMIT_HOOK_SCRIPT,
+        PRE_COMMIT_HOOK_MARKER,
+    )?;
 
     install_single_hook(
         &hooks_dir,
@@ -340,8 +385,56 @@ fn print_summary(repo_root: &Path, agents: &DetectedAgents) {
     println!();
     println!("  Git hooks:");
     println!("    post-checkout  — runs `memex sync` on branch switch");
+    println!("    pre-commit    — blocks staged plaintext context; optional auto-share via MEMEX_PASSPHRASE");
     println!("    post-commit    — links commits to active agent sessions");
-    println!("    Disable both with MEMEX_HOOK=0 in your environment.");
+    println!("    Disable all memex hooks with MEMEX_HOOK=0 in your environment.");
     println!();
     println!("Next: run `memex sync` to pull in past session transcripts.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{install_single_hook, PRE_COMMIT_HOOK_MARKER, PRE_COMMIT_HOOK_SCRIPT};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn pre_commit_hook_blocks_plaintext_context_and_supports_auto_share() {
+        assert!(PRE_COMMIT_HOOK_SCRIPT.contains("refusing commit with plaintext context staged"));
+        assert!(PRE_COMMIT_HOOK_SCRIPT.contains("memex share --passphrase-env MEMEX_PASSPHRASE"));
+    }
+
+    #[test]
+    fn install_single_hook_writes_pre_commit_marker() {
+        let hooks_dir = create_temp_hooks_dir("pre-commit");
+        install_single_hook(
+            &hooks_dir,
+            "pre-commit",
+            PRE_COMMIT_HOOK_SCRIPT,
+            PRE_COMMIT_HOOK_MARKER,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(hooks_dir.join("pre-commit")).unwrap();
+        assert!(content.contains(PRE_COMMIT_HOOK_MARKER));
+
+        let _ = fs::remove_dir_all(hooks_dir);
+    }
+
+    fn create_temp_hooks_dir(label: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!(
+            "memex-init-tests-{}-{}-{}",
+            label,
+            std::process::id(),
+            stamp
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

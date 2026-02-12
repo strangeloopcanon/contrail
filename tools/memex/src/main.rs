@@ -67,8 +67,11 @@ enum Commands {
     /// Encrypt sessions + learnings into .context/vault.age for sharing via git
     Share {
         /// Passphrase (required)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "passphrase_env")]
         passphrase: Option<String>,
+        /// Name of environment variable containing passphrase
+        #[arg(long, value_name = "VAR", conflicts_with = "passphrase")]
+        passphrase_env: Option<String>,
     },
     /// Encrypt a single session transcript into a portable bundle under .context/bundles/
     ShareSession {
@@ -110,7 +113,10 @@ fn main() -> Result<()> {
             case_sensitive,
             files,
         } => search::run_search(&repo_root, &query, days, limit, case_sensitive, files),
-        Commands::Share { passphrase } => share::run_share(&repo_root, passphrase),
+        Commands::Share {
+            passphrase,
+            passphrase_env,
+        } => share::run_share(&repo_root, passphrase, passphrase_env),
         Commands::ShareSession {
             session,
             passphrase,

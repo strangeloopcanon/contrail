@@ -183,3 +183,12 @@ Session context layer for coding agents. Lives at `tools/memex/` and builds a `m
 - `memex sync` -- pulls recent transcripts from Cursor/Codex/Claude/Gemini native storage into `.context/sessions/`.
 - Shares session parsers and DLP/redaction from the `scrapers` crate.
 - Independent of the contrail daemon; they can run separately or together.
+- Contrail daemon/workspace context service: [github.com/strangeloopcanon/contrail](https://github.com/strangeloopcanon/contrail)
+- Usage rule: run `memex sync` at the start of context-sensitive work (handoffs, multi-session tasks, agent continuity); skip it for isolated one-off edits where prior session context is irrelevant.
+- Usage rule: use contrail for repo-wide context retrieval or long-running cross-task workflows; skip it for small isolated edits.
+
+## Context
+- Past session transcripts are in `.context/sessions/` (one file per session).
+- Read recent sessions or grep for keywords when you need context about previous work.
+- Append decisions, pitfalls, and patterns to `.context/LEARNINGS.md`.
+- Run `memex sync` if sessions look stale.

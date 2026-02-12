@@ -13,6 +13,21 @@ Both tools are local-first. You decide what (if anything) to commit or share.
 
 ## Install
 
+Stable releases from crates.io (recommended):
+
+```bash
+# Per-repo context layer
+cargo install contrail-memex --bin memex
+
+# History import + cross-machine export/merge
+cargo install contrail-cli --bin contrail
+
+# Optional backward-compatible binary name
+cargo install importer --bin importer
+```
+
+Latest unreleased code from GitHub `main`:
+
 ```bash
 # Install memex (per-repo context layer)
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
@@ -29,11 +44,13 @@ cargo install --git https://github.com/strangeloopcanon/contrail --package dashb
 cargo install --git https://github.com/strangeloopcanon/contrail --package analysis --bin analysis
 ```
 
-Or install everything locally in one command:
+Install from a local clone (for development work in this repo):
 
 ```bash
 ./install.sh
 ```
+
+Use crates.io for stable published `memex`/`contrail`/`importer`, use `--git` for unreleased builds (and for daemon/UI binaries), and use `./install.sh` when developing inside a local checkout.
 
 If you built locally, the binaries will be in `./target/release/` (e.g. `./target/release/memex`). The Quickstart commands below assume the tools are on your `PATH` (as they are after `cargo install`); otherwise, prefix them with `./target/release/`.
 
@@ -48,7 +65,7 @@ memex init
 memex sync
 ```
 
-`memex init` creates `.context/`, wires detected agents (Codex/Claude/Cursor/Gemini) to look there for prior context, and installs git hooks for commit linkage. `memex sync` pulls recent sessions from native storage into `.context/sessions/` as markdown, with redaction.
+`memex init` creates `.context/`, wires detected agents (Codex/Claude/Cursor/Gemini) to look there for prior context, installs git hooks for sync/linking, and hardens `.gitignore` so plaintext sessions stay local by default. `memex sync` pulls recent sessions from native storage into `.context/sessions/` as markdown, with redaction.
 
 ### Live Capture
 
@@ -135,7 +152,8 @@ Logging:
 
 - **Local-only by default:** Contrail and memex read/write local files. Nothing is uploaded.
 - **Redaction is best-effort:** current patterns cover common API keys/tokens, JWT-like strings, and emails. Treat logs and `.context/` as sensitive anyway.
-- **Encrypted sharing (optional):** `memex share` encrypts `.context/sessions/*.md` and `.context/LEARNINGS.md` into `.context/vault.age` for committing/sharing; `memex unlock` decrypts locally.
+- **Plaintext context stays local:** `memex init` gitignores `.context/sessions/*.md` and `.context/LEARNINGS.md`.
+- **Encrypted sharing (optional):** `memex share` encrypts plaintext context into `.context/vault.age` for committing/sharing; `memex unlock` decrypts locally.
 
 ## Cross-Machine Merge
 
