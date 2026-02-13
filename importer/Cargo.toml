@@ -1,13 +1,13 @@
 [package]
 name = "importer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Contrail history import and cross-machine log merge/export library + CLI"
 license = "MIT"
 repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
-scrapers = { path = "../scrapers", version = "0.1.0" }
+scrapers = { path = "../scrapers", version = "0.1.1" }
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
