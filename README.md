@@ -1,102 +1,103 @@
 # Contrail
 
-Local-first flight recorder for AI coding sessions, plus a per-repo context layer.
-
-## What You Get
-
-Contrail has two pieces:
-
-1. **Flight recorder daemon (`core_daemon`)**: captures sessions from Codex (CLI/Desktop), Claude Code, Cursor, and Gemini/Antigravity from local storage, normalizes them into a single JSONL schema, and applies basic secret/PII redaction before writing to disk.
-2. **memex (`tools/memex`)**: per-repo `.context/` folder that syncs past session transcripts across agents into readable markdown, includes a compacting prompt to slow context rot ("RLM at home"), and supports optional encrypted sharing for teams.
-
-Both tools are local-first. You decide what (if anything) to commit or share.
+Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, and Gemini into a single timeline with secret/PII redaction. Nothing is uploaded anywhere.
 
 ## Install
 
-Stable releases from crates.io (recommended):
-
 ```bash
-# Per-repo context layer
-cargo install contrail-memex --bin memex
-
-# History import + cross-machine export/merge
-cargo install contrail-cli --bin contrail
-
-# Optional backward-compatible binary name
-cargo install importer --bin importer
+cargo install contrail-memex --bin memex       # per-repo context layer
+cargo install contrail-cli --bin contrail       # history import + export/merge
 ```
 
-Latest unreleased code from GitHub `main`:
+<details>
+<summary>Other install methods</summary>
+
+From GitHub `main` (unreleased):
 
 ```bash
-# Install memex (per-repo context layer)
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
-
-# Install contrail CLI (history import + cross-machine export/merge)
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli --bin contrail
-
-# Optional backward-compatible binary name
-cargo install --git https://github.com/strangeloopcanon/contrail --package importer --bin importer
-
-# Install the flight recorder daemon + UIs
 cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon --bin core_daemon
 cargo install --git https://github.com/strangeloopcanon/contrail --package dashboard --bin dashboard
 cargo install --git https://github.com/strangeloopcanon/contrail --package analysis --bin analysis
 ```
 
-Install from a local clone (for development work in this repo):
+From a local clone: `./install.sh`
 
-```bash
-./install.sh
-```
+Binaries end up in `./target/release/` when building locally. The commands below assume they're on your `PATH` (as they are after `cargo install`).
 
-Use crates.io for stable published `memex`/`contrail`/`importer`, use `--git` for unreleased builds (and for daemon/UI binaries), and use `./install.sh` when developing inside a local checkout.
-
-If you built locally, the binaries will be in `./target/release/` (e.g. `./target/release/memex`). The Quickstart commands below assume the tools are on your `PATH` (as they are after `cargo install`); otherwise, prefix them with `./target/release/`.
+</details>
 
 ## Quickstart
 
-### Per-Repo Memory (memex)
-
-In any repo:
+**Per-repo memory** -- in any repo:
 
 ```bash
-memex init
-memex sync
+memex init      # creates .context/, wires agents, installs hooks
+memex sync      # pulls recent sessions into .context/sessions/
 ```
 
-`memex init` creates `.context/`, wires detected agents (Codex/Claude/Cursor/Gemini) to look there for prior context, installs git hooks for sync/linking, and hardens `.gitignore` so plaintext sessions stay local by default. `memex sync` pulls recent sessions from native storage into `.context/sessions/` as markdown, with redaction.
-
-### Live Capture
+**Live capture** -- records sessions as they happen:
 
 ```bash
-core_daemon
+core_daemon     # one-time backfill on first run, then live watchers
 ```
 
-On first run, `core_daemon` does a one-time historical backfill and then switches to live watchers. To re-run backfill, delete `~/.contrail/state/history_import_done.json` and restart the daemon.
-
-### View Logs
+**Browse sessions:**
 
 ```bash
-dashboard
-# open http://127.0.0.1:3000
+dashboard       # http://127.0.0.1:3000
 ```
 
-### Explain a Commit
+**Explain a commit:**
 
 ```bash
-memex explain abc123
+memex explain abc123    # which sessions produced this diff?
 ```
 
-Shows which agent sessions were active when a commit was made — the reasoning behind the diff.
+## Claude Profile Import
 
-## Data Model
+Migrate your Claude Code setup to Codex in one command. Safe to re-run.
 
-By default, Contrail writes an append-only JSONL log to:
+```bash
+contrail import-claude                                          # global
+contrail import-claude --repo-root /path/to/repo                # one repo
+contrail import-claude --repo-root /path/to/repo --include-global
+contrail import-claude --dry-run                                # preview only
+```
 
-- `~/.contrail/logs/master_log.jsonl`
+| Claude source | Codex destination |
+|---|---|
+| `CLAUDE.md`, `.clauderc` | `~/AGENTS.md` or `<repo>/AGENTS.md` |
+| `commands/*.md` | `~/.agents/skills/` or `<repo>/.agents/skills/` |
+| `agents/*.md` | `~/.agents/skills/` or `<repo>/.agents/skills/` |
+| `history.jsonl`, `projects/*.jsonl` | Contrail master log (deduplicated) |
+| `settings.json`, `todos/`, `plugins/` | Archived under `.codex/imports/claude/` |
 
-Each line is a schema-validated `MasterLog` record:
+Instructions are appended with idempotent markers. Commands and agents become Codex `SKILL.md` files with parsed frontmatter. Use `--scope broad|full` to widen what's included, or `--source /path` to override the Claude profile location.
+
+## Cross-Machine Merge
+
+Each machine builds its own log. To combine them:
+
+```bash
+# Machine A: export
+contrail export-log -o ~/Desktop/contrail-export.jsonl
+
+# Machine B: merge (stop daemon first)
+contrail merge-log ~/Desktop/contrail-export.jsonl
+```
+
+Re-running merge is safe -- it deduplicates by event ID and content fingerprint.
+
+## Privacy
+
+Everything is local. Redaction covers common API keys, tokens, JWTs, and emails, but treat logs as sensitive anyway. `memex init` gitignores plaintext sessions; use `memex share` / `memex unlock` for encrypted team sharing via `.context/vault.age`.
+
+<details>
+<summary>Data model</summary>
+
+Contrail writes an append-only JSONL log to `~/.contrail/logs/master_log.jsonl`. Each line:
 
 ```json
 {
@@ -111,121 +112,35 @@ Each line is a schema-validated `MasterLog` record:
 }
 ```
 
-## Default Locations (macOS)
-
-Contrail watches these locations by default (overrideable via env vars):
-
-- Cursor: `~/Library/Application Support/Cursor/User/workspaceStorage`
-- Codex CLI/Desktop sessions: `~/.codex/sessions`
-- Claude Code: `~/.claude/history.jsonl` and `~/.claude/projects`
-- Gemini/Antigravity: `~/.gemini/antigravity/brain`
-
-## Configuration
-
-Paths:
-
-- `CONTRAIL_LOG_PATH` (default `~/.contrail/logs/master_log.jsonl`)
-- `CONTRAIL_CURSOR_STORAGE`
-- `CONTRAIL_CODEX_ROOT`
-- `CONTRAIL_CLAUDE_HISTORY`
-- `CONTRAIL_CLAUDE_PROJECTS`
-- `CONTRAIL_ANTIGRAVITY_BRAIN`
-
-Feature flags:
-
-- `CONTRAIL_ENABLE_CURSOR` (default `true`)
-- `CONTRAIL_ENABLE_CODEX` (default `true`)
-- `CONTRAIL_ENABLE_CLAUDE` (default `true`)
-- `CONTRAIL_ENABLE_ANTIGRAVITY` (default `true`)
-
-Timing:
-
-- `CONTRAIL_CURSOR_SILENCE_SECS` (default `5`)
-- `CONTRAIL_CODEX_SILENCE_SECS` (default `3`)
-- `CONTRAIL_CLAUDE_SILENCE_SECS` (default `5`)
-
-Logging:
-
-- `RUST_LOG=info` (or `debug`, etc) controls daemon/importer logging via `tracing_subscriber`.
-
-## Privacy And Security Notes
-
-- **Local-only by default:** Contrail and memex read/write local files. Nothing is uploaded.
-- **Redaction is best-effort:** current patterns cover common API keys/tokens, JWT-like strings, and emails. Treat logs and `.context/` as sensitive anyway.
-- **Plaintext context stays local:** `memex init` gitignores `.context/sessions/*.md` and `.context/LEARNINGS.md`.
-- **Encrypted sharing (optional):** `memex share` encrypts plaintext context into `.context/vault.age` for committing/sharing; `memex unlock` decrypts locally.
-
-## Cross-Machine Merge
-
-If you use contrail on multiple computers, each machine builds its own master log. The `importer` tool can export from one and merge into another.
-
-**On machine A** (the one you want to export from):
-
-```bash
-# Export everything
-contrail export-log -o ~/Desktop/contrail-export.jsonl
-
-# Or filter: only events after a date, or from a specific tool
-contrail export-log -o ~/Desktop/contrail-export.jsonl --after 2026-01-01T00:00:00Z --tool cursor
-```
-
-**Transfer the file** to machine B however you like (AirDrop, USB, shared folder, etc.).
-
-**On machine B** (stop the daemon first to avoid write conflicts):
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.contrail.daemon.plist
-contrail merge-log ~/Desktop/contrail-export.jsonl
-launchctl load ~/Library/LaunchAgents/com.contrail.daemon.plist
-```
-
-`contrail merge-log` now checks `com.contrail.daemon` and exits early if it appears to be running.
-
-Merge deduplicates in two passes: first by `event_id` UUID, then by a content fingerprint that catches the same underlying event ingested independently on both machines (e.g. if both ran `import-history` from the same Codex/Claude files). Re-running merge with the same file is safe — it's idempotent.
-
-For **per-repo session sharing** (`.context/sessions/`), use the existing memex workflow instead: `memex share` on one machine, commit the vault, `memex unlock` on the other. See the memex README for details.
-
-## Claude Profile Import
-
-Migrate your Claude Code setup (instructions, commands, agents, history) to Codex in one command. Safe to re-run -- instructions use idempotent markers and history is deduplicated, so nothing gets duplicated.
-
-```bash
-# Global: port your entire ~/.claude profile to Codex
-contrail import-claude
-
-# Repo-specific: port a repo's .claude/ config (and root CLAUDE.md)
-contrail import-claude --repo-root /path/to/repo
-
-# Repo + global combined
-contrail import-claude --repo-root /path/to/repo --include-global
-
-# Preview what would happen, without writing anything
-contrail import-claude --dry-run
-```
-
-Where things land:
-
-| Claude source | Codex destination | Notes |
-|---|---|---|
-| `CLAUDE.md`, `.clauderc` | `~/AGENTS.md` (global) or `<repo>/AGENTS.md` | Appended with provenance markers |
-| `commands/*.md` | `~/.agents/skills/claude-cmd-*/SKILL.md` or `<repo>/.agents/skills/` | SKILL.md with parsed frontmatter |
-| `agents/*.md` | `~/.agents/skills/claude-agent-*/SKILL.md` or `<repo>/.agents/skills/` | SKILL.md with parsed frontmatter |
-| `history.jsonl`, `projects/*.jsonl` | Contrail master log | Deduplicated ingest |
-| `settings.json`, `todos/`, `plugins/` | `~/.codex/imports/claude/` or `<repo>/.codex/imports/claude/` | Archived for manual review |
+</details>
 
 <details>
-<summary>Additional flags</summary>
+<summary>Configuration</summary>
 
-- `--scope curated|broad|full` -- Controls which files are included. `curated` (default) picks up instructions, commands, agents, history, settings, todos, and plugins. `broad` adds IDE config. `full` includes everything.
-- `--source /path/to/claude` -- Override where to look for the Claude profile (default: `~/.claude`).
+All paths and behaviour are overrideable via environment variables.
+
+**Paths:**
+`CONTRAIL_LOG_PATH` (default `~/.contrail/logs/master_log.jsonl`), `CONTRAIL_CURSOR_STORAGE`, `CONTRAIL_CODEX_ROOT`, `CONTRAIL_CLAUDE_HISTORY`, `CONTRAIL_CLAUDE_PROJECTS`, `CONTRAIL_ANTIGRAVITY_BRAIN`
+
+**Feature flags:**
+`CONTRAIL_ENABLE_CURSOR`, `CONTRAIL_ENABLE_CODEX`, `CONTRAIL_ENABLE_CLAUDE`, `CONTRAIL_ENABLE_ANTIGRAVITY` (all default `true`)
+
+**Timing:**
+`CONTRAIL_CURSOR_SILENCE_SECS` (5), `CONTRAIL_CODEX_SILENCE_SECS` (3), `CONTRAIL_CLAUDE_SILENCE_SECS` (5)
+
+**Logging:** `RUST_LOG=info` (or `debug`, etc.)
+
+**Default watch locations (macOS):**
+Cursor (`~/Library/Application Support/Cursor/User/workspaceStorage`), Codex (`~/.codex/sessions`), Claude (`~/.claude`), Gemini/Antigravity (`~/.gemini/antigravity/brain`)
 
 </details>
 
-The analysis UI also exposes this via `POST /api/import_claude_setup`.
+<details>
+<summary>Workspace tools</summary>
 
-## Related Tools In This Workspace
+- `contrail` / `importer`: history import + export/merge
+- `exporter`: trimmed dataset export
+- `wrapup`: "AI year in code" report
+- `analysis`: session browser/scorer UI at `http://127.0.0.1:3210`
 
-- `contrail`/`importer`: history import + cross-machine export/merge (`cargo run -p importer -- --help`)
-- `exporter`: writes a trimmed dataset (`cargo run -p exporter`)
-- `wrapup`: generates an "AI year in code" report (`cargo run -p wrapup`)
-- `analysis`: local UI for browsing/scoring/probing sessions (`cargo run -p analysis`)
+</details>
