@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod claude_profile_import;
 pub mod codex;
 pub mod config;
 pub mod cursor;

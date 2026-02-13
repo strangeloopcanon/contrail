@@ -152,6 +152,17 @@ struct ImportHistoryResponse {
     errors: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct ImportClaudeSetupBody {
+    repo_root: Option<PathBuf>,
+    source: Option<PathBuf>,
+    scope: Option<String>,
+    #[serde(default)]
+    include_global: bool,
+    #[serde(default)]
+    dry_run: bool,
+}
+
 const DEFAULT_PROBES: &[&str] = &[
     "apply patch failed",
     "error",
@@ -206,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/session_events", get(get_session_events))
         .route("/api/context_pack", get(get_context_pack))
         .route("/api/import_history", post(import_history))
+        .route("/api/import_claude_setup", post(import_claude_setup))
         .route(
             "/api/memory_blocks",
             get(list_memory_blocks).post(create_memory_block),
@@ -273,6 +285,44 @@ async fn import_history(State(state): State<AppState>) -> ApiResult<Json<ImportH
         skipped: stats.skipped,
         errors: stats.errors,
     }))
+}
+
+async fn import_claude_setup(
+    Json(body): Json<ImportClaudeSetupBody>,
+) -> ApiResult<Json<scrapers::claude_profile_import::SetupReport>> {
+    // Normalise: empty string → None, expand ~ for web callers
+    let repo_root = body
+        .repo_root
+        .clone()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| expand_tilde_path(&p));
+    let target = if let Some(root) = repo_root {
+        scrapers::claude_profile_import::ImportTarget::Repo { repo_root: root }
+    } else {
+        scrapers::claude_profile_import::ImportTarget::Global
+    };
+    let scope = match body.scope.as_deref() {
+        Some("broad") => scrapers::claude_profile_import::ImportScope::Broad,
+        Some("full") => scrapers::claude_profile_import::ImportScope::Full,
+        _ => scrapers::claude_profile_import::ImportScope::Curated,
+    };
+
+    let request = scrapers::claude_profile_import::SetupRequest {
+        target,
+        source: body.source.clone(),
+        scope,
+        include_global: body.include_global,
+        dry_run: body.dry_run,
+    };
+
+    let report = tokio::task::spawn_blocking(move || {
+        scrapers::claude_profile_import::setup_claude_profile(&request)
+    })
+    .await
+    .map_err(|e| ApiError::internal(anyhow::anyhow!("join error: {e}")))?
+    .map_err(ApiError::internal)?;
+
+    Ok(Json(report))
 }
 
 async fn get_sessions(
@@ -782,6 +832,16 @@ fn pick_salient_turns(turns: &[ScoredTurn]) -> Vec<TurnSummary> {
         picks.push(t.turn);
     }
     picks
+}
+
+fn expand_tilde_path(p: &std::path::Path) -> PathBuf {
+    if let Some(s) = p.to_str()
+        && let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    p.to_path_buf()
 }
 
 fn read_session_events(

@@ -1,6 +1,9 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use scrapers::claude_profile_import::{
+    ImportScope, ImportTarget, SetupRequest, setup_claude_profile,
+};
 use scrapers::config::ContrailConfig;
 use scrapers::history_import;
 use scrapers::merge::{self, ExportFilters};
@@ -10,7 +13,7 @@ use std::process::Command;
 #[derive(Parser)]
 #[command(
     name = "importer",
-    about = "Contrail log tools: history import, cross-machine export/merge"
+    about = "Contrail log tools: history import, profile import, cross-machine export/merge"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -59,6 +62,46 @@ enum Commands {
         /// Path to the JSONL file to merge in.
         file: PathBuf,
     },
+
+    /// Migrate Claude Code profile (instructions, commands, agents, history) to Codex.
+    ImportClaude {
+        /// Repo root (makes this a repo-scoped migration; omit for global).
+        #[arg(long)]
+        repo_root: Option<PathBuf>,
+
+        /// Also include global ~/.claude profile when doing a repo migration.
+        #[arg(long, default_value_t = false)]
+        include_global: bool,
+
+        /// Optional source override (default: ~/.claude).
+        #[arg(long)]
+        source: Option<PathBuf>,
+
+        /// Scan scope policy.
+        #[arg(long, value_enum, default_value = "curated")]
+        scope: CliImportScope,
+
+        /// Preview what would happen without writing anything.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum CliImportScope {
+    Curated,
+    Broad,
+    Full,
+}
+
+impl From<CliImportScope> for ImportScope {
+    fn from(value: CliImportScope) -> Self {
+        match value {
+            CliImportScope::Curated => Self::Curated,
+            CliImportScope::Broad => Self::Broad,
+            CliImportScope::Full => Self::Full,
+        }
+    }
 }
 
 pub fn run() -> Result<()> {
@@ -82,6 +125,13 @@ pub fn run() -> Result<()> {
             hostname,
         }) => run_export(output, after, before, project, tool, hostname),
         Some(Commands::MergeLog { file }) => run_merge(file),
+        Some(Commands::ImportClaude {
+            repo_root,
+            include_global,
+            source,
+            scope,
+            dry_run,
+        }) => run_import_claude(repo_root, include_global, source, scope, dry_run),
     }
 }
 
@@ -148,6 +198,119 @@ fn run_merge(file: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn run_import_claude(
+    repo_root: Option<PathBuf>,
+    include_global: bool,
+    source: Option<PathBuf>,
+    scope: CliImportScope,
+    dry_run: bool,
+) -> Result<()> {
+    let target = if let Some(root) = repo_root {
+        ImportTarget::Repo { repo_root: root }
+    } else {
+        ImportTarget::Global
+    };
+
+    let request = SetupRequest {
+        target,
+        source,
+        scope: scope.into(),
+        include_global,
+        dry_run,
+    };
+
+    let report = setup_claude_profile(&request)?;
+
+    if report.dry_run {
+        println!("Claude -> Codex migration (dry run, nothing written)");
+    } else {
+        println!("Claude -> Codex migration complete");
+    }
+    println!();
+
+    if !report.instructions_written.is_empty() {
+        let dest = report
+            .agents_md_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "AGENTS.md".to_string());
+        println!(
+            "  Instructions:  {} appended to {}",
+            report.instructions_written.len(),
+            dest
+        );
+    }
+
+    if !report.skills_written.is_empty() {
+        let cmd_count = report
+            .skills_written
+            .iter()
+            .filter(|s| s.category == "commands")
+            .count();
+        let agent_count = report
+            .skills_written
+            .iter()
+            .filter(|s| s.category == "agents")
+            .count();
+        let dest = report
+            .skills_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "skills/".to_string());
+        println!(
+            "  Skills:        {} written ({} commands, {} agents) -> {}",
+            report.skills_written.len(),
+            cmd_count,
+            agent_count,
+            dest
+        );
+    }
+
+    if report.history_ingested > 0 || report.history_skipped > 0 {
+        println!(
+            "  History:       {} events ingested ({} skipped as duplicates)",
+            report.history_ingested, report.history_skipped
+        );
+    }
+
+    if !report.archived.is_empty() {
+        println!("  Archived:      {} files", report.archived.len());
+        for item in &report.archived {
+            println!(
+                "                   {} -> {}",
+                item.source,
+                item.destination.display()
+            );
+        }
+    }
+
+    if !report.errors.is_empty() {
+        println!();
+        println!("  Errors ({}):", report.errors.len());
+        for err in &report.errors {
+            println!("    - {err}");
+        }
+    }
+
+    if !report.not_transferred.is_empty() {
+        println!();
+        println!("  Manual review needed:");
+        for note in &report.not_transferred {
+            println!("    - {note}");
+        }
+    }
+
+    if let Some(agents) = &report.agents_md_path
+        && !report.instructions_written.is_empty()
+        && !report.dry_run
+    {
+        println!();
+        println!("  Verify imported instructions: {}", agents.display());
+    }
+
+    Ok(())
+}
+
 fn parse_optional_ts(value: Option<&str>, flag_name: &str) -> Result<Option<DateTime<Utc>>> {
     match value {
         None => Ok(None),
@@ -204,5 +367,33 @@ mod tests {
         let Some(Commands::MergeLog { .. }) = parsed.command else {
             panic!("expected merge-log subcommand");
         };
+    }
+
+    #[test]
+    fn import_claude_parses_global() {
+        let parsed = Cli::try_parse_from(["importer", "import-claude"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Commands::ImportClaude { .. })
+        ));
+    }
+
+    #[test]
+    fn import_claude_parses_repo() {
+        let parsed =
+            Cli::try_parse_from(["importer", "import-claude", "--repo-root", "/tmp/repo"]).unwrap();
+        let Some(Commands::ImportClaude { repo_root, .. }) = parsed.command else {
+            panic!("expected import-claude");
+        };
+        assert_eq!(repo_root, Some(PathBuf::from("/tmp/repo")));
+    }
+
+    #[test]
+    fn import_claude_dry_run() {
+        let parsed = Cli::try_parse_from(["importer", "import-claude", "--dry-run"]).unwrap();
+        let Some(Commands::ImportClaude { dry_run, .. }) = parsed.command else {
+            panic!("expected import-claude");
+        };
+        assert!(dry_run);
     }
 }

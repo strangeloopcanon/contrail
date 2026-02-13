@@ -24,6 +24,7 @@ notify-rust = "4.11.0"
 dirs = "5.0.1"
 whoami = "1.6.1"
 arboard = "3.6.1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 tempfile = "3"

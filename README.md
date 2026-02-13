@@ -185,6 +185,44 @@ Merge deduplicates in two passes: first by `event_id` UUID, then by a content fi
 
 For **per-repo session sharing** (`.context/sessions/`), use the existing memex workflow instead: `memex share` on one machine, commit the vault, `memex unlock` on the other. See the memex README for details.
 
+## Claude Profile Import
+
+Migrate your Claude Code setup (instructions, commands, agents, history) to Codex in one command. Safe to re-run -- instructions use idempotent markers and history is deduplicated, so nothing gets duplicated.
+
+```bash
+# Global: port your entire ~/.claude profile to Codex
+contrail import-claude
+
+# Repo-specific: port a repo's .claude/ config (and root CLAUDE.md)
+contrail import-claude --repo-root /path/to/repo
+
+# Repo + global combined
+contrail import-claude --repo-root /path/to/repo --include-global
+
+# Preview what would happen, without writing anything
+contrail import-claude --dry-run
+```
+
+Where things land:
+
+| Claude source | Codex destination | Notes |
+|---|---|---|
+| `CLAUDE.md`, `.clauderc` | `~/AGENTS.md` (global) or `<repo>/AGENTS.md` | Appended with provenance markers |
+| `commands/*.md` | `~/.agents/skills/claude-cmd-*/SKILL.md` or `<repo>/.agents/skills/` | SKILL.md with parsed frontmatter |
+| `agents/*.md` | `~/.agents/skills/claude-agent-*/SKILL.md` or `<repo>/.agents/skills/` | SKILL.md with parsed frontmatter |
+| `history.jsonl`, `projects/*.jsonl` | Contrail master log | Deduplicated ingest |
+| `settings.json`, `todos/`, `plugins/` | `~/.codex/imports/claude/` or `<repo>/.codex/imports/claude/` | Archived for manual review |
+
+<details>
+<summary>Additional flags</summary>
+
+- `--scope curated|broad|full` -- Controls which files are included. `curated` (default) picks up instructions, commands, agents, history, settings, todos, and plugins. `broad` adds IDE config. `full` includes everything.
+- `--source /path/to/claude` -- Override where to look for the Claude profile (default: `~/.claude`).
+
+</details>
+
+The analysis UI also exposes this via `POST /api/import_claude_setup`.
+
 ## Related Tools In This Workspace
 
 - `contrail`/`importer`: history import + cross-machine export/merge (`cargo run -p importer -- --help`)
