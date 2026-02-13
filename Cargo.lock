@@ -2899,6 +2899,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "whoami",
+ "xxhash-rust",
 ]
 
 [[package]]

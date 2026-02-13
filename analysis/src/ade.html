@@ -423,6 +423,50 @@
 	      </div>
 	    </div>
 
+      <div class="card" style="margin-top: 16px">
+        <h2>Import Claude Profile</h2>
+        <div class="row three">
+          <div>
+            <label>Target</label>
+            <select id="claudeTarget">
+              <option value="global">global</option>
+              <option value="repo">repo</option>
+            </select>
+          </div>
+          <div>
+            <label>Repo Root (required for repo target)</label>
+            <input id="claudeRepoRoot" placeholder="/Users/me/my-repo" disabled />
+          </div>
+        </div>
+        <div class="row three">
+          <div>
+            <label>Scope</label>
+            <select id="claudeScope">
+              <option value="curated">curated</option>
+              <option value="broad">broad</option>
+              <option value="full">full</option>
+            </select>
+          </div>
+        </div>
+        <div class="row three">
+          <div>
+            <label>Source Override (optional)</label>
+            <input id="claudeSource" placeholder="~/.claude" />
+          </div>
+          <div>
+            <label style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="claudeIncludeGlobal" />
+              Include global ~/.claude (repo target)
+            </label>
+          </div>
+        </div>
+        <div class="actions" style="justify-content: flex-end; gap: 8px">
+          <button id="claudeSetup">Setup</button>
+          <button class="secondary" id="claudeSetupDry">Dry Run</button>
+        </div>
+        <pre id="claudeImportOut">Use Quick Setup to migrate your Claude profile to Codex in one step.</pre>
+      </div>
+
 	    <div class="card" style="margin-top: 16px">
 	      <h2>Memory Blocks</h2>
 	      <div class="row three">
@@ -480,6 +524,8 @@
           .filter(Boolean);
         return tags.length ? tags : null;
       }
+
+
 
       async function refreshHealth() {
         try {
@@ -724,6 +770,76 @@
         }
       }
 
+      function toggleClaudeRepoRoot() {
+        const target = document.getElementById("claudeTarget").value;
+        const repoInput = document.getElementById("claudeRepoRoot");
+        const isRepo = target === "repo";
+        repoInput.disabled = !isRepo;
+        if (!isRepo) repoInput.value = "";
+      }
+
+      async function setupClaudeImport(dryRun) {
+        const btnSetup = document.getElementById("claudeSetup");
+        const btnDry = document.getElementById("claudeSetupDry");
+        const out = document.getElementById("claudeImportOut");
+        const btn = dryRun ? btnDry : btnSetup;
+        btnSetup.disabled = true;
+        btnDry.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = dryRun ? "Previewing…" : "Setting up…";
+        out.textContent = dryRun ? "Running dry run…" : "Migrating Claude profile to Codex…";
+        try {
+          const repoRoot = document.getElementById("claudeRepoRoot").value.trim();
+          const source = document.getElementById("claudeSource").value.trim();
+          const scope = document.getElementById("claudeScope").value;
+          const includeGlobal = document.getElementById("claudeIncludeGlobal").checked;
+          const body = {
+            scope,
+            repo_root: repoRoot ? repoRoot : null,
+            source: source ? source : null,
+            include_global: includeGlobal,
+            dry_run: dryRun,
+          };
+          const res = await api("/api/import_claude_setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const json = await res.json();
+          const lines = [];
+          lines.push(dryRun ? "Dry run complete (nothing written)" : "Claude -> Codex migration complete");
+          lines.push("");
+          if (json.instructions_written && json.instructions_written.length > 0)
+            lines.push(`Instructions:  ${json.instructions_written.length} appended to ${json.agents_md_path || "AGENTS.md"}`);
+          if (json.skills_written && json.skills_written.length > 0) {
+            const cmds = json.skills_written.filter(s => s.category === "commands").length;
+            const agents = json.skills_written.filter(s => s.category === "agents").length;
+            lines.push(`Skills:        ${json.skills_written.length} written (${cmds} commands, ${agents} agents)`);
+          }
+          if (json.history_ingested > 0 || json.history_skipped > 0)
+            lines.push(`History:       ${json.history_ingested} ingested (${json.history_skipped} skipped)`);
+          if (json.archived && json.archived.length > 0)
+            lines.push(`Archived:      ${json.archived.length} files`);
+          if (json.not_transferred && json.not_transferred.length > 0) {
+            lines.push("");
+            lines.push("Manual review:");
+            json.not_transferred.forEach(n => lines.push("  - " + n));
+          }
+          if (json.errors && json.errors.length > 0) {
+            lines.push("");
+            lines.push("Errors:");
+            json.errors.forEach(e => lines.push("  - " + e));
+          }
+          out.textContent = lines.join("\n");
+        } catch (e) {
+          out.textContent = `Setup failed: ${e.message}`;
+        } finally {
+          btn.textContent = prev;
+          btnSetup.disabled = false;
+          btnDry.disabled = false;
+        }
+      }
+
       function renderBlock(block) {
         const div = document.createElement("div");
         div.className = "block";
@@ -944,9 +1060,13 @@
         await refreshSessions(false);
       });
       document.getElementById("sessImport").addEventListener("click", importHistoryNow);
+      document.getElementById("claudeTarget").addEventListener("change", toggleClaudeRepoRoot);
+      document.getElementById("claudeSetup").addEventListener("click", () => setupClaudeImport(false));
+      document.getElementById("claudeSetupDry").addEventListener("click", () => setupClaudeImport(true));
       document.getElementById("createBlock").addEventListener("click", createBlock);
 
       (async function init() {
+        toggleClaudeRepoRoot();
         await refreshHealth();
         await refreshBlocks();
         await refreshContextPack(false);
