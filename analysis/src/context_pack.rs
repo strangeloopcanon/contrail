@@ -2,8 +2,8 @@ use crate::memory::MemoryRecord;
 use crate::memory_blocks::MemoryBlock;
 use crate::models::SalientSession;
 use chrono::{DateTime, NaiveDate, Utc};
+use contrail_types::SecurityFlags;
 use scrapers::sentry::Sentry;
-use scrapers::types::SecurityFlags;
 use serde::Serialize;
 use uuid::Uuid;
 

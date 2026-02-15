@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "contrail_types",
     "core_daemon", "dashboard", "importer",
     "scrapers", "tools/exporter", "tools/wrapup", "analysis",
     "tools/memex", "tools/contrail",

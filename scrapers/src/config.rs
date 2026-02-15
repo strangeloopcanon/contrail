@@ -30,6 +30,8 @@ pub const HISTORY_IMPORT_MARKER_REL: &str = ".contrail/state/history_import_done
 const DEFAULT_CURSOR_SILENCE_SECS: u64 = 5;
 const DEFAULT_CODEX_SILENCE_SECS: u64 = 3;
 const DEFAULT_CLAUDE_SILENCE_SECS: u64 = 5;
+const DEFAULT_LOG_MAX_BYTES: u64 = 524_288_000;
+const DEFAULT_LOG_KEEP_FILES: usize = 5;
 
 // ── Config struct ───────────────────────────────────────────────────────
 
@@ -48,6 +50,8 @@ pub struct ContrailConfig {
     pub cursor_silence_secs: u64,
     pub codex_silence_secs: u64,
     pub claude_silence_secs: u64,
+    pub log_max_bytes: u64,
+    pub log_keep_files: usize,
 }
 
 impl ContrailConfig {
@@ -98,6 +102,8 @@ impl ContrailConfig {
                 "CONTRAIL_CLAUDE_SILENCE_SECS",
                 DEFAULT_CLAUDE_SILENCE_SECS,
             ),
+            log_max_bytes: env_u64("CONTRAIL_LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES),
+            log_keep_files: env_usize("CONTRAIL_LOG_KEEP_FILES", DEFAULT_LOG_KEEP_FILES),
         })
     }
 }
@@ -119,6 +125,13 @@ fn env_bool(key: &str, default: bool) -> bool {
 fn env_u64(key: &str, default: u64) -> u64 {
     match env::var(key) {
         Ok(val) => val.parse::<u64>().unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    match env::var(key) {
+        Ok(val) => val.parse::<usize>().unwrap_or(default),
         Err(_) => default,
     }
 }

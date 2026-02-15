@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use scrapers::types::SecurityFlags;
+use contrail_types::SecurityFlags;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};

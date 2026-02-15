@@ -18,6 +18,7 @@ use axum::{
 };
 use chrono::NaiveDate;
 use context_pack::ContextPackResponse;
+use contrail_types::MasterLog;
 use memory::{MemoryRecord, append_memory, read_memories};
 use memory_blocks::{MemoryBlock, MemoryBlockUpdate};
 use models::{
@@ -238,8 +239,14 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = env::var("ANALYSIS_BIND").unwrap_or_else(|_| "127.0.0.1:3210".to_string());
     println!("✈️  Contrail Analysis running at http://{bind_addr}");
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 async fn index() -> Html<&'static str> {
@@ -471,7 +478,7 @@ async fn get_probe(
 async fn get_session_events(
     State(state): State<AppState>,
     Query(query): Query<SessionEventsQuery>,
-) -> ApiResult<Json<Vec<scrapers::types::MasterLog>>> {
+) -> ApiResult<Json<Vec<MasterLog>>> {
     if query.source_tool.trim().is_empty() || query.session_id.trim().is_empty() {
         return Err(ApiError::bad_request(anyhow::anyhow!(
             "session_events requires source_tool and session_id"
@@ -849,7 +856,7 @@ fn read_session_events(
     source_tool: &str,
     session_id: &str,
     max_content_chars: usize,
-) -> anyhow::Result<Vec<scrapers::types::MasterLog>> {
+) -> anyhow::Result<Vec<MasterLog>> {
     let file =
         std::fs::File::open(log_path).map_err(|e| anyhow::anyhow!("open {:?}: {}", log_path, e))?;
     let reader = BufReader::new(file);
@@ -861,7 +868,7 @@ fn read_session_events(
             Ok(l) => l,
             Err(_) => continue,
         };
-        let Ok(mut log) = serde_json::from_str::<scrapers::types::MasterLog>(&line) else {
+        let Ok(mut log) = serde_json::from_str::<MasterLog>(&line) else {
             continue;
         };
         if log.source_tool != source_tool || log.session_id != session_id {

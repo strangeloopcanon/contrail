@@ -2,6 +2,7 @@ use anyhow::Context;
 use scrapers::config::ContrailConfig;
 use scrapers::history_import;
 use scrapers::log_writer::LogWriter;
+use scrapers::rotation;
 use scrapers::watchers::Harvester;
 use std::fs;
 use std::path::PathBuf;
@@ -30,6 +31,25 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| config.log_path.clone());
     fs::create_dir_all(&contrail_dir).context("Failed to create log directory")?;
     info!(path = ?contrail_dir, "ensured log directory exists");
+
+    match rotation::rotate_if_needed(
+        &config.log_path,
+        config.log_max_bytes,
+        config.log_keep_files,
+    ) {
+        Ok(outcome) => {
+            if outcome.rotated {
+                info!(
+                    archive = ?outcome.archive_path,
+                    pruned = outcome.pruned,
+                    "rotated master log at startup"
+                );
+            }
+        }
+        Err(e) => {
+            error!(err = ?e, "startup log rotation failed; continuing without rotation");
+        }
+    }
 
     maybe_import_history(&config);
 

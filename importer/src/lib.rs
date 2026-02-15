@@ -8,6 +8,7 @@ use scrapers::config::ContrailConfig;
 use scrapers::history_import;
 use scrapers::merge::{self, ExportFilters};
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 #[derive(Parser)]

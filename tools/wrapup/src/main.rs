@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
-use scrapers::types::MasterLog;
+use contrail_types::MasterLog;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};

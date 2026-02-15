@@ -2,9 +2,9 @@ use crate::models::{Dataset, ScoredTurn, SessionBundle, SessionSummary, TurnSumm
 use crate::salience::{score_session, score_turn, tokenize};
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
+use contrail_types::MasterLog;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use scrapers::types::MasterLog;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
