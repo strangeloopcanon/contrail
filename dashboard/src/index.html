@@ -325,8 +325,12 @@
                     <option value="all">All Projects</option>
                 </select>
                 <select id="modeSelect">
-                    <option value="tail">Tail (fast)</option>
-                    <option value="all">All (slow)</option>
+                    <option value="live" selected>Live</option>
+                    <option value="24h">Last 24h</option>
+                    <option value="7d">Last 7d</option>
+                    <option value="30d">Last 30d</option>
+                    <option value="365d">Last 365d</option>
+                    <option value="all">All Time</option>
                 </select>
                 <select id="viewSelect">
                     <option value="conversation" selected>Conversation</option>
@@ -371,7 +375,7 @@
     <script>
         let currentFilter = 'all';
         let currentProject = 'all';
-	        let currentMode = 'tail';
+	        let currentMode = 'live';
 	        let currentView = 'conversation';
 	        let currentLimit = 200;
 	        let allSessions = [];
@@ -382,6 +386,8 @@
 	        let sessions = [];
 	        let selectedKey = null;
 	        let pollTimer = null;
+	        let liveSource = null;
+	        let reconnectTimer = null;
 	        const sessionDetailCache = new Map();
 
 	        document.getElementById('toolFilter').addEventListener('change', (e) => {
@@ -432,30 +438,96 @@
 
         function updateModePill() {
             const pill = document.getElementById('modePill');
-            if (currentMode === 'tail') {
+            if (currentMode === 'live') {
                 pill.textContent = 'Live';
                 pill.className = 'pill live';
             } else {
-                pill.textContent = 'Slow';
+                const labels = {
+                    '24h': '24h',
+                    '7d': '7d',
+                    '30d': '30d',
+                    '365d': '365d',
+                    all: 'All Time',
+                };
+                pill.textContent = labels[currentMode] || 'History';
                 pill.className = 'pill slow';
             }
         }
 
-        function resetPolling() {
+        function stopPollingFallback() {
             if (pollTimer) {
                 clearInterval(pollTimer);
                 pollTimer = null;
             }
-            if (currentMode === 'tail') {
-                pollTimer = setInterval(fetchAndRender, 2000);
+        }
+
+        function startPollingFallback() {
+            stopPollingFallback();
+            pollTimer = setInterval(fetchAndRender, 2000);
+        }
+
+        function closeLiveSource() {
+            if (liveSource) {
+                liveSource.close();
+                liveSource = null;
+            }
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        }
+
+        function buildStreamUrl() {
+            const params = new URLSearchParams();
+            if (currentFilter !== 'all') {
+                params.set('tool', currentFilter);
+            }
+            const qs = params.toString();
+            return qs ? `/api/stream?${qs}` : '/api/stream';
+        }
+
+        function startLiveStream() {
+            closeLiveSource();
+            stopPollingFallback();
+
+            try {
+                liveSource = new EventSource(buildStreamUrl());
+            } catch (_) {
+                startPollingFallback();
+                return;
+            }
+
+            liveSource.onopen = () => {
+                stopPollingFallback();
+            };
+
+            liveSource.onmessage = () => {
+                fetchAndRender();
+            };
+
+            liveSource.onerror = () => {
+                closeLiveSource();
+                startPollingFallback();
+                reconnectTimer = setTimeout(() => {
+                    if (currentMode === 'live') {
+                        startLiveStream();
+                    }
+                }, 3000);
+            };
+        }
+
+        function resetPolling() {
+            closeLiveSource();
+            stopPollingFallback();
+            if (currentMode === 'live') {
+                startLiveStream();
             }
         }
 
         function buildApiUrl() {
             const params = new URLSearchParams();
-            if (currentMode === 'all') {
-                params.set('all', 'true');
-            } else {
+            params.set('window', currentMode);
+            if (currentMode === 'live') {
                 params.set('limit', String(currentLimit));
             }
             if (currentFilter !== 'all') {
@@ -467,6 +539,7 @@
 
 	        function buildTailUrl(limitOverride) {
 	            const params = new URLSearchParams();
+	            params.set('window', 'live');
 	            params.set('limit', String(limitOverride || currentLimit));
 	            if (currentFilter !== 'all') {
 	                params.set('tool', currentFilter);
@@ -480,7 +553,7 @@
 	                const logs = await response.json();
 	                const tailSessions = groupSessions(logs);
 
-	                if (currentMode === 'tail') {
+	                if (currentMode === 'live') {
 	                    const now = Date.now();
 	                    const shouldDiscover =
 	                        forceDiscovery ||
@@ -561,7 +634,7 @@
 
 	        async function ensureSessionDetailsLoaded(key, opts = {}) {
 	            if (!key) return;
-	            if (currentMode !== 'tail') return;
+	            if (currentMode !== 'live') return;
 	            const force = Boolean(opts.force);
 
 	            const base =
@@ -573,6 +646,7 @@
 	            if (!force && cached && cached.limit >= limit) return;
 
 	            const params = new URLSearchParams();
+	            params.set('window', 'live');
 	            params.set('limit', String(limit));
 	            params.set('tool', base.tool);
 	            params.set('session_id', base.sessionId);
@@ -596,7 +670,7 @@
 
 	        async function maybeRefreshSelectedSession() {
 	            if (!selectedKey) return;
-	            if (currentMode !== 'tail') return;
+	            if (currentMode !== 'live') return;
 	            const global = sessions.find((s) => s.key === selectedKey);
 	            if (!global) return;
 	            const cached = sessionDetailCache.get(selectedKey);
@@ -609,7 +683,7 @@
 	            renderSessionsList();
 	            renderConversation();
 
-	            if (currentMode !== 'tail') return;
+	            if (currentMode !== 'live') return;
 
 	            const convo = document.getElementById('conversation');
 	            convo.innerHTML =

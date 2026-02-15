@@ -49,10 +49,37 @@ core_daemon     # one-time backfill on first run, then live watchers
 dashboard       # http://127.0.0.1:3000
 ```
 
+Dashboard lookback modes:
+- `Live` (SSE stream with polling fallback)
+- `Last 24h`, `Last 7d`, `Last 30d`, `Last 365d`, `All Time`
+
+Historical windows read both `master_log.jsonl` and rotated archives, so older data stays visible after rotation.
+
 **Explain a commit:**
 
 ```bash
 memex explain abc123    # which sessions produced this diff?
+```
+
+## Dev Workflow
+
+Use interface contract targets:
+
+```bash
+make setup
+make check
+make test
+make all
+```
+
+Local orchestration helper:
+
+```bash
+./scripts/dev.sh start    # build + launch core_daemon/dashboard/analysis
+./scripts/dev.sh status
+./scripts/dev.sh logs
+./scripts/dev.sh stop
+./scripts/dev.sh check
 ```
 
 ## Claude Profile Import
@@ -127,6 +154,11 @@ All paths and behaviour are overrideable via environment variables.
 
 **Timing:**
 `CONTRAIL_CURSOR_SILENCE_SECS` (5), `CONTRAIL_CODEX_SILENCE_SECS` (3), `CONTRAIL_CLAUDE_SILENCE_SECS` (5)
+
+**Rotation:**
+`CONTRAIL_LOG_MAX_BYTES` (524288000), `CONTRAIL_LOG_KEEP_FILES` (5)
+
+When `master_log.jsonl` exceeds the max size at daemon startup, Contrail rotates it to `master_log.<UTC timestamp>.jsonl` and prunes older archives to the keep count.
 
 **Logging:** `RUST_LOG=info` (or `debug`, etc.)
 
