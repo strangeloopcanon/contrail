@@ -655,6 +655,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "contrail-dashboard"
+version = "0.1.2"
+dependencies = [
+ "async-stream",
+ "axum",
+ "chrono",
+ "dirs",
+ "futures-core",
+ "scrapers",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.5.2",
+]
+
+[[package]]
 name = "contrail-memex"
 version = "0.1.2"
 dependencies = [
@@ -792,22 +808,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "dashboard"
-version = "0.1.2"
-dependencies = [
- "async-stream",
- "axum",
- "chrono",
- "dirs",
- "futures-core",
- "scrapers",
- "serde",
- "serde_json",
- "tokio",
- "tower-http 0.5.2",
 ]
 
 [[package]]

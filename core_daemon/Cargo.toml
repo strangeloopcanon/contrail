@@ -2,6 +2,9 @@
 name = "core_daemon"
 version = "0.1.2"
 edition = "2021"
+description = "Contrail daemon for passive local session capture"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 scrapers = { path = "../scrapers", version = "0.1.3" }

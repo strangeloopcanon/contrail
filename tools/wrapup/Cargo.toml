@@ -2,6 +2,9 @@
 name = "wrapup"
 version = "0.1.2"
 edition = "2024"
+description = "Contrail year-in-code report generator"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 anyhow = "1.0"

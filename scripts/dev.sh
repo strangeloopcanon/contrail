@@ -76,7 +76,7 @@ wait_for_health() {
 start_all() {
     cargo build --workspace
     start_proc "core_daemon" "$CORE_PID_FILE" "$CORE_LOG" cargo run -p core_daemon
-    start_proc "dashboard" "$DASH_PID_FILE" "$DASH_LOG" cargo run -p dashboard
+    start_proc "dashboard" "$DASH_PID_FILE" "$DASH_LOG" cargo run -p contrail-dashboard
     start_proc "analysis" "$ANALYSIS_PID_FILE" "$ANALYSIS_LOG" cargo run -p analysis
     wait_for_health "http://127.0.0.1:3000/health" "dashboard" || true
     wait_for_health "http://127.0.0.1:3210/health" "analysis" || true

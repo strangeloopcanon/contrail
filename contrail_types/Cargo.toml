@@ -4,6 +4,7 @@ version = "0.1.2"
 edition = "2021"
 description = "Shared Contrail log schema and protocol types"
 license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 anyhow = "1.0"

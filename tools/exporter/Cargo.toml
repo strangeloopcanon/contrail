@@ -2,6 +2,9 @@
 name = "exporter"
 version = "0.1.2"
 edition = "2024"
+description = "Contrail exporter for filtered JSONL datasets"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 anyhow = "1.0"

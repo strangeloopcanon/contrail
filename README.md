@@ -5,24 +5,16 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ## Install
 
 ```bash
-# Install from crates.io (for published crates)
+# Install from crates.io
+cargo install contrail-cli
+cargo install contrail-memex
 cargo install importer
-cargo install contrail-cli    # currently installs: contrail-cli (contrail after next publish)
-cargo install contrail-memex   # installs: memex
+cargo install core_daemon
+cargo install contrail-dashboard --bin dashboard
+cargo install analysis
+cargo install exporter
+cargo install wrapup
 ```
-
-Published crates:
-- `importer` (`importer`)
-- `contrail-cli` (`contrail-cli`)  
-  (`contrail` binary is available from `cargo install --path` or `--git` installs once v0.1.3 is published)
-- `contrail-memex` (`memex`)
-
-Not yet published on crates.io (use source install):
-- `core_daemon`
-- `dashboard`
-- `analysis`
-- `exporter`
-- `wrapup`
 
 <details>
 <summary>Other install methods</summary>
@@ -34,7 +26,7 @@ cargo install --git https://github.com/strangeloopcanon/contrail --package impor
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
 cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon
-cargo install --git https://github.com/strangeloopcanon/contrail --package dashboard
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-dashboard --bin dashboard
 cargo install --git https://github.com/strangeloopcanon/contrail --package analysis
 cargo install --git https://github.com/strangeloopcanon/contrail --package exporter
 cargo install --git https://github.com/strangeloopcanon/contrail --package wrapup
@@ -135,7 +127,7 @@ cargo publish --package importer
 cargo publish --package contrail-memex
 cargo publish --package contrail-cli
 cargo publish --package core_daemon
-cargo publish --package dashboard
+cargo publish --package contrail-dashboard
 cargo publish --package analysis
 cargo publish --package exporter
 cargo publish --package wrapup
