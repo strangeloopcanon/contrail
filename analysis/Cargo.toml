@@ -1,13 +1,13 @@
 [package]
 name = "analysis"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
 axum = "0.7.5"
 chrono = { version = "0.4", features = ["serde"] }
-contrail-types = { path = "../contrail_types", version = "0.1.0" }
+contrail-types = { path = "../contrail_types", version = "0.1.1" }
 dirs = "5.0.1"
 regex = "1.10.4"
 scrapers = { path = "../scrapers" }
