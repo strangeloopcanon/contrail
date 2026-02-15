@@ -5,15 +5,23 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ## Install
 
 ```bash
-# Install from crates.io (stable)
-cargo install core_daemon
-cargo install dashboard
-cargo install analysis
+# Install from crates.io (for published crates)
 cargo install importer
-cargo install exporter
-cargo install wrapup
-cargo install contrail-cli --bin contrail      # history import + export/merge
-cargo install contrail-memex --bin memex       # per-repo context layer
+cargo install contrail-cli    # installs: contrail
+cargo install contrail-memex   # installs: memex
+```
+
+Published crates:
+- `importer` (`importer`)
+- `contrail-cli` (`contrail`)
+- `contrail-memex` (`memex`)
+
+Not yet published on crates.io (use source install):
+- `core_daemon`
+- `dashboard`
+- `analysis`
+- `exporter`
+- `wrapup`
 ```
 
 <details>
@@ -22,16 +30,19 @@ cargo install contrail-memex --bin memex       # per-repo context layer
 From GitHub `main` (unreleased):
 
 ```bash
+cargo install --git https://github.com/strangeloopcanon/contrail --package importer
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
-cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli --bin contrail
-cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon --bin core_daemon
-cargo install --git https://github.com/strangeloopcanon/contrail --package dashboard --bin dashboard
-cargo install --git https://github.com/strangeloopcanon/contrail --package analysis --bin analysis
+cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon
+cargo install --git https://github.com/strangeloopcanon/contrail --package dashboard
+cargo install --git https://github.com/strangeloopcanon/contrail --package analysis
+cargo install --git https://github.com/strangeloopcanon/contrail --package exporter
+cargo install --git https://github.com/strangeloopcanon/contrail --package wrapup
 ```
 
 From a local clone:
 - `./install.sh` for an all-in-one workflow, or
-- package-specific installs such as `cargo install --path tools/contrail --locked --bin contrail`
+- package-specific installs such as `cargo install --path tools/contrail --locked`
 
 </details>
 

@@ -6,6 +6,10 @@ description = "Contrail CLI: history import and cross-machine export/merge"
 license = "MIT"
 repository = "https://github.com/strangeloopcanon/contrail"
 
+[[bin]]
+name = "contrail"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0"
 importer = { path = "../../importer", version = "0.1.3" }
