@@ -5,8 +5,15 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ## Install
 
 ```bash
+# Install from crates.io (stable)
+cargo install core_daemon
+cargo install dashboard
+cargo install analysis
+cargo install importer
+cargo install exporter
+cargo install wrapup
+cargo install contrail-cli --bin contrail      # history import + export/merge
 cargo install contrail-memex --bin memex       # per-repo context layer
-cargo install contrail-cli --bin contrail       # history import + export/merge
 ```
 
 <details>
@@ -22,9 +29,9 @@ cargo install --git https://github.com/strangeloopcanon/contrail --package dashb
 cargo install --git https://github.com/strangeloopcanon/contrail --package analysis --bin analysis
 ```
 
-From a local clone: `./install.sh`
-
-Binaries end up in `./target/release/` when building locally. The commands below assume they're on your `PATH` (as they are after `cargo install`).
+From a local clone:
+- `./install.sh` for an all-in-one workflow, or
+- package-specific installs such as `cargo install --path tools/contrail --locked --bin contrail`
 
 </details>
 
