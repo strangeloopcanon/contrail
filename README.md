@@ -7,13 +7,14 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ```bash
 # Install from crates.io (for published crates)
 cargo install importer
-cargo install contrail-cli    # installs: contrail
+cargo install contrail-cli    # installs: contrail-cli
 cargo install contrail-memex   # installs: memex
 ```
 
 Published crates:
 - `importer` (`importer`)
-- `contrail-cli` (`contrail`)
+- `contrail-cli` (`contrail-cli`)  
+  (`contrail` binary is available from `cargo install --path` or `--git` installs once v0.1.3 is published)
 - `contrail-memex` (`memex`)
 
 Not yet published on crates.io (use source install):
