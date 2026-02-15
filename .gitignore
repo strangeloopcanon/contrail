@@ -37,6 +37,10 @@ export/wrapup_*.json
 # Local Contrail data (keeps personal logs/memories out of commits)
 .contrail/
 /.beads
+# Local IDE/assistant/session metadata (tooling state, not project source)
+/.codex
+/.context
+/.cursor
 # memex: raw sessions gitignored (vault.age is committed instead)
 .context/sessions/*.md
 .context/LEARNINGS.md
