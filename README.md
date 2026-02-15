@@ -7,7 +7,7 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ```bash
 # Install from crates.io (for published crates)
 cargo install importer
-cargo install contrail-cli    # installs: contrail-cli
+cargo install contrail-cli    # currently installs: contrail-cli (contrail after next publish)
 cargo install contrail-memex   # installs: memex
 ```
 
@@ -23,7 +23,6 @@ Not yet published on crates.io (use source install):
 - `analysis`
 - `exporter`
 - `wrapup`
-```
 
 <details>
 <summary>Other install methods</summary>
@@ -56,16 +55,28 @@ memex init      # creates .context/, wires agents, installs hooks
 memex sync      # pulls recent sessions into .context/sessions/
 ```
 
-**Live capture** -- records sessions as they happen:
+**Start Contrail services (from anywhere):**
+
+```bash
+contrail up       # starts core_daemon + dashboard + analysis
+contrail status   # check running state
+contrail down     # stop all three
+```
+
+If your PATH has conflicting binary names, set explicit paths before `contrail up`:
+
+```bash
+export CONTRAIL_CORE_DAEMON_BIN="$HOME/.cargo/bin/core_daemon"
+export CONTRAIL_DASHBOARD_BIN="$HOME/.cargo/bin/dashboard"
+export CONTRAIL_ANALYSIS_BIN="$HOME/.cargo/bin/analysis"
+```
+
+**Individual service entrypoints (optional):**
 
 ```bash
 core_daemon     # one-time backfill on first run, then live watchers
-```
-
-**Browse sessions:**
-
-```bash
 dashboard       # http://127.0.0.1:3000
+analysis        # http://127.0.0.1:3210
 ```
 
 Dashboard lookback modes:
@@ -207,6 +218,9 @@ All paths and behaviour are overrideable via environment variables.
 `CONTRAIL_LOG_MAX_BYTES` (524288000), `CONTRAIL_LOG_KEEP_FILES` (5)
 
 When `master_log.jsonl` exceeds the max size at daemon startup, Contrail rotates it to `master_log.<UTC timestamp>.jsonl` and prunes older archives to the keep count.
+
+**Service lifecycle overrides (`contrail up/down/status`):**
+`CONTRAIL_CORE_DAEMON_BIN`, `CONTRAIL_DASHBOARD_BIN`, `CONTRAIL_ANALYSIS_BIN`
 
 **Logging:** `RUST_LOG=info` (or `debug`, etc.)
 
