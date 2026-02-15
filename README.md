@@ -89,6 +89,35 @@ Local orchestration helper:
 ./scripts/dev.sh check
 ```
 
+## Release Workflow
+
+Use this before publishing a release to crates.io:
+
+```bash
+./scripts/release-bump.sh patch   # or minor / major
+make check
+make test
+```
+
+The bump script updates:
+- package versions in workspace `Cargo.toml` files
+- internal workspace dependency pins (`contrail-types`, `scrapers`, `importer`, `contrail-memex`, `contrail-cli`)
+
+Publish in dependency order:
+
+```bash
+cargo publish --package contrail-types
+cargo publish --package scrapers
+cargo publish --package importer
+cargo publish --package contrail-memex
+cargo publish --package contrail-cli
+cargo publish --package core_daemon
+cargo publish --package dashboard
+cargo publish --package analysis
+cargo publish --package exporter
+cargo publish --package wrapup
+```
+
 ## Claude Profile Import
 
 Migrate your Claude Code setup to Codex in one command. Safe to re-run.

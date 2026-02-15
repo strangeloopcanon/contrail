@@ -1,6 +1,6 @@
 [package]
 name = "contrail-cli"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Contrail CLI: history import and cross-machine export/merge"
 license = "MIT"
@@ -8,4 +8,4 @@ repository = "https://github.com/strangeloopcanon/contrail"
 
 [dependencies]
 anyhow = "1.0"
-importer = { path = "../../importer", version = "0.1.2" }
+importer = { path = "../../importer", version = "0.1.3" }

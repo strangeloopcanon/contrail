@@ -1,4 +1,4 @@
-.PHONY: setup check test all
+.PHONY: setup check test all bump
 
 setup:
 	cargo fetch --locked
@@ -11,3 +11,6 @@ test:
 	cargo test --workspace
 
 all: check test
+
+bump:
+	./scripts/release-bump.sh patch
