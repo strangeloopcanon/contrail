@@ -1,0 +1,51 @@
+[package]
+name = "contrails"
+version = "0.1.2"
+edition = "2024"
+description = "All-in-one installer for Contrail: local-first flight recorder for AI coding sessions"
+license = "MIT"
+repository = "https://github.com/strangeloopcanon/contrail"
+
+[[bin]]
+name = "contrail"
+path = "src/bin/contrail.rs"
+
+[[bin]]
+name = "memex"
+path = "src/bin/memex.rs"
+
+[[bin]]
+name = "core_daemon"
+path = "src/bin/core_daemon.rs"
+
+[[bin]]
+name = "dashboard"
+path = "src/bin/dashboard.rs"
+
+[[bin]]
+name = "analysis"
+path = "src/bin/analysis.rs"
+
+[[bin]]
+name = "importer"
+path = "src/bin/importer.rs"
+
+[[bin]]
+name = "exporter"
+path = "src/bin/exporter.rs"
+
+[[bin]]
+name = "wrapup"
+path = "src/bin/wrapup.rs"
+
+[dependencies]
+contrail-cli = { path = "../tools/contrail", version = "0.1.3" }
+contrail-memex = { path = "../tools/memex", version = "0.1.2" }
+core_daemon = { path = "../core_daemon", version = "0.1.2" }
+contrail-dashboard = { path = "../dashboard", version = "0.1.2" }
+analysis = { path = "../analysis", version = "0.1.2" }
+importer = { path = "../importer", version = "0.1.3" }
+exporter = { path = "../tools/exporter", version = "0.1.2" }
+wrapup = { path = "../tools/wrapup", version = "0.1.2" }
+anyhow = "1.0"
+tokio = { version = "1.37.0", features = ["full"] }
