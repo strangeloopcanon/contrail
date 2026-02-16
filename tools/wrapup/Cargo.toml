@@ -1,6 +1,6 @@
 [package]
 name = "wrapup"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Contrail year-in-code report generator"
 license = "MIT"
@@ -9,7 +9,7 @@ repository = "https://github.com/strangeloopcanon/contrail"
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-contrail-types = { path = "../../contrail_types", version = "0.1.2" }
+contrail-types = { path = "../../contrail_types", version = "0.1.3" }
 dirs = "5.0.1"
 reqwest = { version = "0.12.4", features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.31.0", features = ["bundled"] }

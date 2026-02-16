@@ -1,6 +1,6 @@
 [package]
 name = "contrail-dashboard"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Contrail dashboard web UI for local-first session logs"
 license = "MIT"
@@ -20,4 +20,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tower-http = { version = "0.5.2", features = ["fs", "trace", "cors"] }
 dirs = "5.0.1"
-scrapers = { path = "../scrapers", version = "0.1.3" } # Reuse types
+scrapers = { path = "../scrapers", version = "0.1.4" } # Reuse types

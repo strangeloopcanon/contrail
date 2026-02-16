@@ -95,7 +95,7 @@ set_dependency_version() {
             fi
 
             if [[ "$line" == *"version ="* ]]; then
-                line="$(printf '%s' "$line" | perl -pe "s/(version[[:space:]]*=[[:space:]]*\")[0-9]+\\.[0-9]+\\.[0-9]+(\")/\\1${new_version}\\2/")"
+                line="$(printf '%s' "$line" | perl -pe "s/(version[[:space:]]*=[[:space:]]*\")[0-9]+\\.[0-9]+\\.[0-9]+(\")/\${1}${new_version}\${2}/")"
             else
                 line="$(printf '%s' "$line" | perl -pe "s/\\}\\s*$/, version = \\\"${new_version}\\\"}/")"
             fi
