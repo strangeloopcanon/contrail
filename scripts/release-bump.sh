@@ -137,6 +137,7 @@ bump_and_store "tools/exporter/Cargo.toml" "exporter"
 bump_and_store "tools/wrapup/Cargo.toml" "wrapup"
 bump_and_store "tools/memex/Cargo.toml" "contrail-memex"
 bump_and_store "tools/contrail/Cargo.toml" "contrail-cli"
+bump_and_store "contrails/Cargo.toml" "contrails"
 
 set_dependency_version "$ROOT_DIR/core_daemon/Cargo.toml" "scrapers" "$(get_new_version "scrapers")"
 set_dependency_version "$ROOT_DIR/dashboard/Cargo.toml" "scrapers" "$(get_new_version "scrapers")"
@@ -147,6 +148,15 @@ set_dependency_version "$ROOT_DIR/importer/Cargo.toml" "scrapers" "$(get_new_ver
 set_dependency_version "$ROOT_DIR/tools/memex/Cargo.toml" "scrapers" "$(get_new_version "scrapers")"
 set_dependency_version "$ROOT_DIR/tools/contrail/Cargo.toml" "importer" "$(get_new_version "importer")"
 set_dependency_version "$ROOT_DIR/tools/wrapup/Cargo.toml" "contrail-types" "$(get_new_version "contrail-types")"
+
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "contrail-cli" "$(get_new_version "contrail-cli")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "contrail-memex" "$(get_new_version "contrail-memex")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "core_daemon" "$(get_new_version "core_daemon")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "contrail-dashboard" "$(get_new_version "contrail-dashboard")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "analysis" "$(get_new_version "analysis")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "importer" "$(get_new_version "importer")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "exporter" "$(get_new_version "exporter")"
+set_dependency_version "$ROOT_DIR/contrails/Cargo.toml" "wrapup" "$(get_new_version "wrapup")"
 
 echo "Updated versions:"
 sort "$VERSION_MAP" | while IFS="|" read -r package version; do

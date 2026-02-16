@@ -696,6 +696,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "contrails"
+version = "0.1.2"
+dependencies = [
+ "analysis",
+ "anyhow",
+ "contrail-cli",
+ "contrail-dashboard",
+ "contrail-memex",
+ "core_daemon",
+ "exporter",
+ "importer",
+ "tokio",
+ "wrapup",
+]
+
+[[package]]
 name = "cookie-factory"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

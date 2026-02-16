@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    wrapup::run()
+    importer::run()
 }

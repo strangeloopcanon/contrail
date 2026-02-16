@@ -5,31 +5,31 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 ## Install
 
 ```bash
-# Install from crates.io
-cargo install contrail-cli
-cargo install contrail-memex
-cargo install importer
-cargo install core_daemon
-cargo install contrail-dashboard --bin dashboard
-cargo install analysis
-cargo install exporter
-cargo install wrapup
+cargo install contrails
 ```
+
+This single command installs all eight binaries: `contrail`, `memex`, `core_daemon`, `dashboard`, `analysis`, `importer`, `exporter`, `wrapup`.
 
 <details>
 <summary>Other install methods</summary>
 
+Individual packages (if you only need one tool):
+
+```bash
+cargo install contrail-cli          # just the CLI
+cargo install contrail-memex        # just memex
+cargo install core_daemon           # just the daemon
+cargo install contrail-dashboard    # just the dashboard
+cargo install analysis              # just the analysis UI
+cargo install importer              # backward-compatible CLI alias
+cargo install exporter              # dataset export
+cargo install wrapup                # year-in-code report
+```
+
 From GitHub `main` (unreleased):
 
 ```bash
-cargo install --git https://github.com/strangeloopcanon/contrail --package importer
-cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-cli
-cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-memex --bin memex
-cargo install --git https://github.com/strangeloopcanon/contrail --package core_daemon
-cargo install --git https://github.com/strangeloopcanon/contrail --package contrail-dashboard --bin dashboard
-cargo install --git https://github.com/strangeloopcanon/contrail --package analysis
-cargo install --git https://github.com/strangeloopcanon/contrail --package exporter
-cargo install --git https://github.com/strangeloopcanon/contrail --package wrapup
+cargo install --git https://github.com/strangeloopcanon/contrail --package contrails
 ```
 
 From a local clone:
@@ -131,6 +131,7 @@ cargo publish --package contrail-dashboard
 cargo publish --package analysis
 cargo publish --package exporter
 cargo publish --package wrapup
+cargo publish --package contrails
 ```
 
 ## Claude Profile Import
