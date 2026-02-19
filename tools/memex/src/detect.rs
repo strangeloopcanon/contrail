@@ -41,11 +41,12 @@ fn detect_cursor(home: &Path, repo_roots: &[String]) -> bool {
 }
 
 fn detect_codex(home: &Path, repo_roots: &[String]) -> bool {
-    let sessions_root = home.join(".codex/sessions");
-    if !sessions_root.is_dir() {
-        return false;
+    for sessions_root in codex_sessions_roots_from_home(home) {
+        if scan_jsonl_dir_for_repo(&sessions_root, repo_roots, 500) {
+            return true;
+        }
     }
-    scan_jsonl_dir_for_repo(&sessions_root, repo_roots, 500)
+    false
 }
 
 fn detect_claude(home: &Path, repo_roots: &[String]) -> bool {
@@ -184,13 +185,35 @@ fn is_path_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')
 }
 
+fn codex_sessions_roots_from_home(home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    let cli_sessions = home.join(".codex/sessions");
+    if cli_sessions.is_dir() {
+        roots.push(cli_sessions);
+    }
+
+    let desktop_sessions = home.join("Library/Application Support/codex-desktop/codex/sessions");
+    if desktop_sessions.is_dir() {
+        roots.push(desktop_sessions);
+    }
+
+    roots
+}
+
 /// Get standard storage paths for reference.
 pub fn cursor_workspace_storage() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join("Library/Application Support/Cursor/User/workspaceStorage"))
 }
 
 pub fn codex_sessions_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codex/sessions"))
+    codex_sessions_roots().into_iter().next()
+}
+
+pub fn codex_sessions_roots() -> Vec<PathBuf> {
+    dirs::home_dir()
+        .map(|h| codex_sessions_roots_from_home(&h))
+        .unwrap_or_default()
 }
 
 pub fn claude_projects_dir() -> Option<PathBuf> {

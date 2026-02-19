@@ -31,7 +31,7 @@ After that, any agent you start in this repo can read or grep `.context/sessions
 Each coding agent already saves its own session transcripts to disk:
 
 - **Cursor**: SQLite in `~/Library/Application Support/Cursor/User/workspaceStorage/`
-- **Codex CLI/Desktop**: JSONL in `~/.codex/sessions/`
+- **Codex CLI/Desktop**: JSONL in `~/.codex/sessions/` and `~/Library/Application Support/codex-desktop/codex/sessions/`
 - **Claude Code**: JSONL in `~/.claude/projects/` and `~/.claude/history.jsonl`
 - **Gemini/Antigravity**: Files in `~/.gemini/antigravity/brain/`
 
