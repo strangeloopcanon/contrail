@@ -13,15 +13,17 @@ pub fn read_sessions(
     cutoff: &DateTime<Utc>,
     _quiet: bool,
 ) -> Result<Vec<Session>> {
-    let sessions_root = match crate::detect::codex_sessions_root() {
-        Some(p) if p.is_dir() => p,
-        _ => return Ok(Vec::new()),
-    };
+    let session_roots = crate::detect::codex_sessions_roots();
+    if session_roots.is_empty() {
+        return Ok(Vec::new());
+    }
 
     let mut sessions: HashMap<String, Session> = HashMap::new();
 
-    // Walk YYYY/MM/DD structure
-    walk_sessions_dir(&sessions_root, repo_roots, cutoff, &mut sessions)?;
+    // Walk YYYY/MM/DD structure (and legacy flat roots) for each known location.
+    for sessions_root in session_roots {
+        walk_sessions_dir(&sessions_root, repo_roots, cutoff, &mut sessions)?;
+    }
 
     Ok(sessions.into_values().collect())
 }
@@ -74,6 +76,8 @@ fn read_codex_jsonl(
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string();
+    let mut file_repo_context: Option<String> = None;
+    let mut session_repo_context: HashMap<String, String> = HashMap::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -85,10 +89,32 @@ fn read_codex_jsonl(
             None => continue,
         };
 
-        // Filter by repo
-        let cwd = match &parsed.project_context {
-            Some(c) if crate::aliases::matches_any_root(c, repo_roots) => c.clone(),
-            _ => continue,
+        // Preserve repo context at line/session/file scope. Codex often emits cwd
+        // only in session_meta / turn_context records, while user/assistant message
+        // lines omit it. Without this, real chat turns get dropped.
+        let session_id = parsed
+            .session_id
+            .clone()
+            .unwrap_or_else(|| file_session_id.clone());
+
+        let line_repo_context = parsed
+            .project_context
+            .as_deref()
+            .filter(|cwd| crate::aliases::matches_any_root(cwd, repo_roots))
+            .map(str::to_string);
+
+        if let Some(cwd) = line_repo_context.as_ref() {
+            if file_repo_context.is_none() {
+                file_repo_context = Some(cwd.clone());
+            }
+            session_repo_context.insert(session_id.clone(), cwd.clone());
+        }
+
+        let cwd = line_repo_context
+            .or_else(|| session_repo_context.get(&session_id).cloned())
+            .or_else(|| file_repo_context.clone());
+        let Some(cwd) = cwd else {
+            continue;
         };
 
         // Filter by cutoff
@@ -102,8 +128,6 @@ fn read_codex_jsonl(
         if parsed.role == "system" {
             continue;
         }
-
-        let session_id = parsed.session_id.unwrap_or_else(|| file_session_id.clone());
 
         let branch = parsed
             .metadata
