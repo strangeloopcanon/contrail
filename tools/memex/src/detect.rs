@@ -206,10 +206,6 @@ pub fn cursor_workspace_storage() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join("Library/Application Support/Cursor/User/workspaceStorage"))
 }
 
-pub fn codex_sessions_root() -> Option<PathBuf> {
-    codex_sessions_roots().into_iter().next()
-}
-
 pub fn codex_sessions_roots() -> Vec<PathBuf> {
     dirs::home_dir()
         .map(|h| codex_sessions_roots_from_home(&h))
