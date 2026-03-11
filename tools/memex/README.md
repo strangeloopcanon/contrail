@@ -47,13 +47,14 @@ What it writes depends on which agents have been used in this repo (auto-detecte
 
 | Agent | File created | What it does |
 |-------|-------------|--------------|
-| Codex | Appends to `AGENTS.md`, writes `.codex/config.toml` | Points Codex at the context folder and compact prompt |
+| Codex | Appends to `AGENTS.md`, writes `.codex/config.toml` + `.codex/compact_prompt.md` | Points Codex at a repo-local compact prompt |
 | Claude Code | Creates/appends to `CLAUDE.md` | Points Claude at the context folder |
 | Cursor | Creates `.cursor/rules/memex.mdc` | Points Cursor at the context folder |
 | Gemini | Creates/appends to `GEMINI.md` | Points Gemini at the context folder |
 
 Also writes:
-- `.context/compact_prompt.md` -- a compaction policy that teaches agents to compress context while leaving search keys pointing back to `.context/sessions/`
+- `.context/compact_prompt.md` -- a shared compaction policy that teaches agents to compress context while leaving search keys pointing back to `.context/sessions/`
+- `.codex/compact_prompt.md` -- a Codex-local copy so Codex startup does not depend on `.context/compact_prompt.md` staying present
 - `.context/LEARNINGS.md` -- a shared file where agents append decisions, pitfalls, and patterns
 - `.gitignore` entries for `.context/sessions/*.md` and `.context/LEARNINGS.md` (local plaintext only; share via `vault.age`)
 - A local-only repo-root alias list under `.context/.memex/` so renames/moves don't break `memex sync` (gitignored via `.git/info/exclude`)
@@ -167,7 +168,7 @@ Looking at core_daemon/src/main.rs, you spawn a new task...
 
 ## Compact prompt
 
-`.context/compact_prompt.md` is a compaction policy. For Codex, it's automatically wired via `.codex/config.toml`. For other agents, it's a reference document -- you can tell the agent "use `.context/compact_prompt.md` when compressing context."
+`.context/compact_prompt.md` is the shared compaction policy. For Codex, `memex init` also writes a repo-local copy at `.codex/compact_prompt.md` and wires that through `.codex/config.toml`, so Codex does not break if `.context/compact_prompt.md` gets removed. For other agents, `.context/compact_prompt.md` remains the reference document -- you can tell the agent "use `.context/compact_prompt.md` when compressing context."
 
 The prompt teaches the agent to preserve search keys pointing back to `.context/sessions/` when compacting, so detail can be recovered later by grepping the archive.
 

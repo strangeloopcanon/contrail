@@ -49,6 +49,12 @@ pitfalls, and patterns to .context/LEARNINGS.md.
 Run `memex sync` if sessions look stale.
 "#;
 
+const CODEX_COMPACT_PROMPT_FILE: &str = "compact_prompt.md";
+const CODEX_COMPACT_CONFIG_KEY: &str = "experimental_compact_prompt_file";
+const CODEX_COMPACT_CONFIG_LINE: &str = "experimental_compact_prompt_file = \"compact_prompt.md\"";
+const LEGACY_CODEX_COMPACT_CONFIG_LINE: &str =
+    "experimental_compact_prompt_file = \"../.context/compact_prompt.md\"";
+
 pub fn run_init(repo_root: &Path) -> Result<()> {
     let repo_roots = aliases::load_repo_roots(repo_root);
     let agents = detect::detect_agents(&repo_roots);
@@ -104,11 +110,16 @@ fn write_agent_files(repo_root: &Path, agents: &DetectedAgents) -> Result<()> {
         let agents_md = repo_root.join("AGENTS.md");
         append_section_if_missing(&agents_md, AGENT_INSTRUCTION, AGENT_MARKER)?;
 
-        // Write .codex/config.toml entry for compact prompt
         let codex_dir = repo_root.join(".codex");
         fs::create_dir_all(&codex_dir)?;
+        let codex_compact_path = codex_dir.join(CODEX_COMPACT_PROMPT_FILE);
+        write_if_missing(
+            &codex_compact_path,
+            COMPACT_PROMPT,
+            ".codex/compact_prompt.md",
+        )?;
         let codex_config = codex_dir.join("config.toml");
-        append_codex_compact_config(&codex_config)?;
+        ensure_codex_compact_config(&codex_config)?;
     }
 
     // Claude Code: CLAUDE.md
@@ -169,25 +180,58 @@ fn append_section_if_missing(path: &Path, section: &str, marker: &str) -> Result
     Ok(())
 }
 
-fn append_codex_compact_config(config_path: &Path) -> Result<()> {
-    let compact_line = "experimental_compact_prompt_file = \"../.context/compact_prompt.md\"";
-
+fn ensure_codex_compact_config(config_path: &Path) -> Result<()> {
     if config_path.exists() {
         let existing = fs::read_to_string(config_path)?;
-        if existing.contains("experimental_compact_prompt_file") {
+        if existing.contains(CODEX_COMPACT_CONFIG_LINE) {
             println!("  skip .codex/config.toml (compact prompt already configured)");
             return Ok(());
         }
+
+        let mut patched_lines = Vec::new();
+        let mut saw_compact_key = false;
+        let mut patched_legacy_path = false;
+
+        for line in existing.lines() {
+            if line.trim() == LEGACY_CODEX_COMPACT_CONFIG_LINE {
+                patched_lines.push(CODEX_COMPACT_CONFIG_LINE.to_string());
+                saw_compact_key = true;
+                patched_legacy_path = true;
+                continue;
+            }
+
+            if line.trim_start().starts_with(CODEX_COMPACT_CONFIG_KEY) {
+                saw_compact_key = true;
+            }
+
+            patched_lines.push(line.to_string());
+        }
+
+        if patched_legacy_path {
+            let mut content = patched_lines.join("\n");
+            if existing.ends_with('\n') {
+                content.push('\n');
+            }
+            fs::write(config_path, content)?;
+            println!("  patched .codex/config.toml (migrated compact prompt path)");
+            return Ok(());
+        }
+
+        if saw_compact_key {
+            println!("  skip .codex/config.toml (custom compact prompt already configured)");
+            return Ok(());
+        }
+
         let mut content = existing;
         if !content.ends_with('\n') {
             content.push('\n');
         }
-        content.push_str(compact_line);
+        content.push_str(CODEX_COMPACT_CONFIG_LINE);
         content.push('\n');
         fs::write(config_path, content)?;
         println!("  patched .codex/config.toml (added compact prompt path)");
     } else {
-        fs::write(config_path, format!("{compact_line}\n"))?;
+        fs::write(config_path, format!("{CODEX_COMPACT_CONFIG_LINE}\n"))?;
         println!("  wrote .codex/config.toml");
     }
     Ok(())
@@ -394,7 +438,10 @@ fn print_summary(repo_root: &Path, agents: &DetectedAgents) {
 
 #[cfg(test)]
 mod tests {
-    use super::{install_single_hook, PRE_COMMIT_HOOK_MARKER, PRE_COMMIT_HOOK_SCRIPT};
+    use super::{
+        ensure_codex_compact_config, install_single_hook, CODEX_COMPACT_CONFIG_LINE,
+        LEGACY_CODEX_COMPACT_CONFIG_LINE, PRE_COMMIT_HOOK_MARKER, PRE_COMMIT_HOOK_SCRIPT,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -420,6 +467,41 @@ mod tests {
         assert!(content.contains(PRE_COMMIT_HOOK_MARKER));
 
         let _ = fs::remove_dir_all(hooks_dir);
+    }
+
+    #[test]
+    fn ensure_codex_compact_config_migrates_legacy_context_path() {
+        let dir = create_temp_hooks_dir("codex-config-legacy");
+        let config_path = dir.join("config.toml");
+        fs::write(
+            &config_path,
+            format!("{LEGACY_CODEX_COMPACT_CONFIG_LINE}\n"),
+        )
+        .unwrap();
+
+        ensure_codex_compact_config(&config_path).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains(CODEX_COMPACT_CONFIG_LINE));
+        assert!(!content.contains(LEGACY_CODEX_COMPACT_CONFIG_LINE));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ensure_codex_compact_config_preserves_custom_path() {
+        let dir = create_temp_hooks_dir("codex-config-custom");
+        let config_path = dir.join("config.toml");
+        let custom_line = "experimental_compact_prompt_file = \"/tmp/custom-prompt.md\"";
+        fs::write(&config_path, format!("{custom_line}\n")).unwrap();
+
+        ensure_codex_compact_config(&config_path).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains(custom_line));
+        assert!(!content.contains(CODEX_COMPACT_CONFIG_LINE));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn create_temp_hooks_dir(label: &str) -> PathBuf {
