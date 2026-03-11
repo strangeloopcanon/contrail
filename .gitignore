@@ -46,3 +46,7 @@ export/wrapup_*.json
 .context/LEARNINGS.md
 # Rust formatter backups
 **/*.rs.bk
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
