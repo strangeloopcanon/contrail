@@ -364,7 +364,7 @@ async fn get_sessions(
 
     let sort = query.sort.as_deref().unwrap_or("score");
     match sort {
-        "recent" => sessions.sort_by(|a, b| b.ended_at.cmp(&a.ended_at)),
+        "recent" => sessions.sort_by_key(|session| std::cmp::Reverse(session.ended_at)),
         _ => sessions.sort_by(|a, b| b.score.total_cmp(&a.score)),
     }
 
@@ -416,7 +416,7 @@ async fn get_projects(
     }
 
     let mut projects: Vec<ProjectSummary> = map.into_values().collect();
-    projects.sort_by(|a, b| b.last_ended_at.cmp(&a.last_ended_at));
+    projects.sort_by_key(|project| std::cmp::Reverse(project.last_ended_at));
 
     Ok(Json(ProjectsResponse {
         projects,
@@ -570,7 +570,7 @@ async fn get_context_pack(
         let _guard = state.memory_io_lock.lock().await;
         let mut blocks =
             memory_blocks::read_blocks(&state.memory_blocks_path).map_err(ApiError::internal)?;
-        blocks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        blocks.sort_by_key(|block| std::cmp::Reverse(block.updated_at));
         blocks.truncate(25);
         blocks
     } else {

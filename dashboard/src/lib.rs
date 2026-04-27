@@ -218,10 +218,7 @@ async fn read_new_bytes(path: &PathBuf, offset: u64) -> std::io::Result<Vec<u8>>
 
 fn drain_complete_lines(carry: &mut Vec<u8>) -> Vec<String> {
     let mut out = Vec::new();
-    loop {
-        let Some(pos) = carry.iter().position(|b| *b == b'\n') else {
-            break;
-        };
+    while let Some(pos) = carry.iter().position(|b| *b == b'\n') {
         let mut line = carry.drain(..=pos).collect::<Vec<_>>();
         if matches!(line.last(), Some(b'\n')) {
             line.pop();

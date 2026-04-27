@@ -157,7 +157,7 @@ pub fn load_dataset(log_path: &Path, day_filter: Option<NaiveDate>) -> Result<Da
     }
 
     // Order newest first by default
-    sessions.sort_by(|a, b| b.summary.ended_at.cmp(&a.summary.ended_at));
+    sessions.sort_by_key(|bundle| std::cmp::Reverse(bundle.summary.ended_at));
 
     Ok(Dataset {
         sessions,
