@@ -35,7 +35,11 @@ pub fn read_cursor_messages(db_path: &Path) -> Result<Vec<CursorMessage>> {
 
     let conn = Connection::open(&temp_path).context("failed to open Cursor DB snapshot")?;
     let mut stmt = conn.prepare(
-        "SELECT key, value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' ORDER BY key",
+        "SELECT key, value FROM ItemTable
+         WHERE key LIKE '%chat%'
+            OR key LIKE '%composer%'
+            OR key IN ('aiService.prompts', 'aiService.generations')
+         ORDER BY key",
     )?;
     let rows = stmt.query_map([], |row| {
         let key: String = row.get(0)?;
@@ -55,7 +59,7 @@ pub fn read_cursor_messages(db_path: &Path) -> Result<Vec<CursorMessage>> {
         let raw_string = String::from_utf8_lossy(&raw).into_owned();
 
         if let Ok(value) = serde_json::from_str::<Value>(&raw_string) {
-            let parsed = parse_cursor_value(&value);
+            let parsed = parse_cursor_value_for_key(&key, &value);
             if !parsed.is_empty() {
                 messages.extend(parsed);
                 continue;
@@ -99,6 +103,52 @@ fn parse_cursor_value(value: &Value) -> Vec<CursorMessage> {
             }
         }
         _ => {}
+    }
+
+    messages
+}
+
+fn parse_cursor_value_for_key(key: &str, value: &Value) -> Vec<CursorMessage> {
+    if key == "aiService.prompts" {
+        return parse_ai_service_prompts(value);
+    }
+
+    parse_cursor_value(value)
+}
+
+fn parse_ai_service_prompts(value: &Value) -> Vec<CursorMessage> {
+    let Value::Array(items) = value else {
+        return Vec::new();
+    };
+
+    let mut messages = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let Some(text) = obj.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+
+        let content = trim_content(text);
+        if content.is_empty() {
+            continue;
+        }
+
+        let mut metadata = extract_metadata(obj);
+        metadata.insert(
+            "cursor_storage_key".to_string(),
+            Value::String("aiService.prompts".to_string()),
+        );
+        if let Some(value) = obj.get("commandType") {
+            insert_scalar(&mut metadata, "commandType", value);
+        }
+
+        messages.push(CursorMessage {
+            role: "user".to_string(),
+            content,
+            metadata,
+        });
     }
 
     messages
@@ -405,6 +455,49 @@ mod tests {
             Some("bash")
         );
         assert_eq!(meta.get("temperature").and_then(|v| v.as_f64()), Some(0.2));
+        Ok(())
+    }
+
+    #[test]
+    fn parses_ai_service_prompts_as_user_messages() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("cursor_state_test_{}.db", Uuid::new_v4()));
+        let conn = Connection::open(&path)?;
+        conn.execute(
+            "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)",
+            [],
+        )?;
+
+        let payload = r#"
+        [
+            {"text": "summarize this module", "commandType": 4},
+            {"text": "write focused tests", "commandType": 2}
+        ]"#;
+        conn.execute(
+            "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+            ("aiService.prompts", payload),
+        )?;
+
+        let messages = read_cursor_messages(&path)?;
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "summarize this module");
+        assert_eq!(
+            messages[0]
+                .metadata
+                .get("cursor_storage_key")
+                .and_then(Value::as_str),
+            Some("aiService.prompts")
+        );
+        assert_eq!(
+            messages[0]
+                .metadata
+                .get("commandType")
+                .and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(messages[1].role, "user");
+
+        let _ = fs::remove_file(&path);
         Ok(())
     }
 }
