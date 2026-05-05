@@ -36,15 +36,6 @@ export/wrapup_*.json
 
 # Local Contrail data (keeps personal logs/memories out of commits)
 .contrail/
-
-# Beads runtime state is local, but keep the small config/export files
-# versioned so bd can sync issue state without forcing ignored files.
-/.beads/*
-!/.beads/.gitignore
-!/.beads/README.md
-!/.beads/config.yaml
-!/.beads/metadata.json
-!/.beads/issues.jsonl
 # Local IDE/assistant/session metadata (tooling state, not project source)
 /.codex
 /.context
@@ -55,9 +46,5 @@ export/wrapup_*.json
 # Rust formatter backups
 **/*.rs.bk
 
-# Dolt database files (added by bd init)
-.dolt/
+# Local database files
 *.db
-
-# Beads / Dolt files (added by bd init)
-.beads-credential-key

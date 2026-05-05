@@ -9,7 +9,6 @@ mode: baseline
 
 ## Quick start (read this first)
 - Set `AGENT_MODE` (baseline by default; see Appendix E for production triggers).
-- Run `bd init` before work; track plan/risks/tests/failures in bd (no Markdown checklists).
 - Prefer `uv` over `pip`.
 - Run Interface Contract commands (stop after first failure):
   - `setup` / `bootstrap`: env + deps; install/refresh hooks (pre-commit, commitlint).
@@ -46,7 +45,7 @@ Agents MUST call these targets, not raw tools.
 | Releases | Conventional Commits | Semantic release + changelog |
 
 ## Development cycle
-1) Plan and log assumptions (bd).  
+1) Plan and log assumptions when the task is large enough to need them.
 2) Implement smallest viable slice with typed interfaces.  
 3) Run Interface Contract (halt on first failure; triage via Appendix B).  
 4) Open PR with tests (LLM live if relevant), risks, rollback.  
@@ -158,9 +157,6 @@ Switch to `AGENT_MODE=production` when any apply: PII/reg data handled; >50 exte
 - Classify failure: transient infra (5xx/429/timeout → retry with jitter up to 3) vs deterministic (schema/safety/eval fail → fix).  
 - If 429 persists after retries, treat as pacing/config bug.  
 - Exit codes: `0` pass; `1` test/gate failure; `2` cost ceiling exceeded; `3` infrastructure failure; `4` threshold/config missing.
-
-## Work plan / issues
-All new work must be tracked in bd (not Markdown). Run `bd quickstart` / `bd init`; bd is the source of truth for steps.
 
 # Agents
 
