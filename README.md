@@ -4,6 +4,8 @@ Local-first flight recorder for AI coding sessions, plus a per-repo context laye
 
 ## Install
 
+For normal use, install the latest published bundle from crates.io:
+
 ```bash
 cargo install contrails
 ```
@@ -26,15 +28,25 @@ cargo install exporter              # dataset export
 cargo install wrapup                # year-in-code report
 ```
 
-From GitHub `main` (unreleased):
+Use GitHub `main` when you need a fix that has merged but is not published to crates.io yet:
 
 ```bash
 cargo install --git https://github.com/strangeloopcanon/contrail --package contrails
 ```
 
-From a local clone:
-- `./install.sh` for an all-in-one workflow, or
-- package-specific installs such as `cargo install --path tools/contrail --locked`
+Use a local clone when you are actively developing Contrail or want the exact binaries from your checkout:
+
+```bash
+./install.sh
+# equivalent core command:
+cargo install --path contrails --locked --force
+```
+
+For a single binary from a local clone, install the package directly, for example:
+
+```bash
+cargo install --path tools/contrail --locked --force
+```
 
 </details>
 
