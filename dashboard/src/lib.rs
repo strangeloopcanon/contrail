@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::env;
 use std::fs::File;
-use std::io::{BufRead, Read, Seek, SeekFrom};
+use std::io::{BufRead, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -25,12 +25,17 @@ use tokio::{
 };
 use tower_http::cors::CorsLayer;
 
-pub async fn run() {
+pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let log_path = env::var("CONTRAIL_LOG_PATH")
         .map(PathBuf::from)
         .ok()
         .or_else(|| dirs::home_dir().map(|h| h.join(".contrail/logs/master_log.jsonl")))
-        .expect("Could not resolve CONTRAIL_LOG_PATH or home directory");
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::NotFound,
+                "could not resolve CONTRAIL_LOG_PATH or home directory",
+            )
+        })?;
 
     let (live_tx, _) = broadcast::channel(2048);
     let state = Arc::new(AppState {
@@ -50,11 +55,11 @@ pub async fn run() {
 
     let bind_addr = env::var("DASHBOARD_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     println!("✈️  Contrail Dashboard running at http://{bind_addr}");
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+        .await?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -336,19 +341,13 @@ fn load_tail_logs(
 
 fn matches_filters(json: &Value, tool: Option<&str>, session_id: Option<&str>) -> bool {
     if let Some(tool_filter) = tool
-        && json
-            .get("source_tool")
-            .and_then(Value::as_str)
-            .is_some_and(|t| t != tool_filter)
+        && json.get("source_tool").and_then(Value::as_str) != Some(tool_filter)
     {
         return false;
     }
 
     if let Some(session_filter) = session_id
-        && json
-            .get("session_id")
-            .and_then(Value::as_str)
-            .is_some_and(|s| s != session_filter)
+        && json.get("session_id").and_then(Value::as_str) != Some(session_filter)
     {
         return false;
     }
@@ -457,4 +456,40 @@ struct StreamQuery {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_filters;
+    use serde_json::json;
+
+    #[test]
+    fn tool_filter_rejects_missing_or_different_tool() {
+        assert!(matches_filters(
+            &json!({"source_tool": "codex-cli"}),
+            Some("codex-cli"),
+            None,
+        ));
+        assert!(!matches_filters(
+            &json!({"source_tool": "cursor"}),
+            Some("codex-cli"),
+            None,
+        ));
+        assert!(!matches_filters(&json!({}), Some("codex-cli"), None));
+    }
+
+    #[test]
+    fn session_filter_rejects_missing_or_different_session() {
+        assert!(matches_filters(
+            &json!({"session_id": "s1"}),
+            None,
+            Some("s1"),
+        ));
+        assert!(!matches_filters(
+            &json!({"session_id": "s2"}),
+            None,
+            Some("s1"),
+        ));
+        assert!(!matches_filters(&json!({}), None, Some("s1")));
+    }
 }

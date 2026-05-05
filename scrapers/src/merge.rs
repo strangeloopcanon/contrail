@@ -5,13 +5,15 @@
 //! then by a content fingerprint to catch the same underlying event ingested independently
 //! on two machines (which would have different UUIDs).
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -49,6 +51,12 @@ pub fn export_log(log_path: &Path, filters: &ExportFilters, output: &Path) -> Re
     let file = File::open(log_path)
         .with_context(|| format!("open master log at {}", log_path.display()))?;
     let reader = BufReader::new(file);
+
+    ensure!(
+        !paths_refer_to_same_file(log_path, output)?,
+        "refusing to export over source log: {}",
+        output.display()
+    );
 
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
@@ -92,15 +100,16 @@ pub fn export_log(log_path: &Path, filters: &ExportFilters, output: &Path) -> Re
 }
 
 fn matches_filters(json: &Value, f: &ExportFilters) -> bool {
-    if let Some(ref after) = f.after {
-        if let Some(ts) = parse_timestamp(json) {
+    if f.after.is_some() || f.before.is_some() {
+        let Some(ts) = parse_timestamp(json) else {
+            return false;
+        };
+        if let Some(ref after) = f.after {
             if ts < *after {
                 return false;
             }
         }
-    }
-    if let Some(ref before) = f.before {
-        if let Some(ts) = parse_timestamp(json) {
+        if let Some(ref before) = f.before {
             if ts >= *before {
                 return false;
             }
@@ -306,6 +315,31 @@ fn write_jsonl_line<W: Write>(writer: &mut W, line: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> Result<bool> {
+    let left_meta = fs::metadata(left).with_context(|| format!("stat {}", left.display()))?;
+    let right_meta = match fs::metadata(right) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("stat {}", right.display())),
+    };
+
+    Ok(left_meta.dev() == right_meta.dev() && left_meta.ino() == right_meta.ino())
+}
+
+#[cfg(not(unix))]
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> Result<bool> {
+    if !right.exists() {
+        return Ok(false);
+    }
+
+    let left =
+        fs::canonicalize(left).with_context(|| format!("canonicalize {}", left.display()))?;
+    let right =
+        fs::canonicalize(right).with_context(|| format!("canonicalize {}", right.display()))?;
+    Ok(left == right)
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -487,6 +521,20 @@ mod tests {
     }
 
     #[test]
+    fn export_rejects_output_path_that_is_source_log() {
+        let event = make_event(Uuid::new_v4(), "cursor", "s1", "preserve me", "macA");
+        let log_file = write_events(&[event]);
+        let before = fs::read_to_string(log_file.path()).unwrap();
+
+        let err = export_log(log_file.path(), &ExportFilters::default(), log_file.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("refusing to export over source log"));
+        assert_eq!(fs::read_to_string(log_file.path()).unwrap(), before);
+    }
+
+    #[test]
     fn export_filters_by_date_range() {
         let ts_old = "2024-01-01T00:00:00Z";
         let ts_new = "2026-06-01T00:00:00Z";
@@ -505,6 +553,26 @@ mod tests {
         let stats = export_log(log_file.path(), &filters, output.path()).unwrap();
         assert_eq!(stats.exported, 1);
         assert_eq!(stats.skipped, 1);
+    }
+
+    #[test]
+    fn export_date_filter_rejects_missing_or_invalid_timestamp() {
+        let mut missing = make_event(Uuid::new_v4(), "cursor", "s1", "missing", "macA");
+        missing.as_object_mut().unwrap().remove("timestamp");
+        let mut invalid = make_event(Uuid::new_v4(), "cursor", "s2", "invalid", "macA");
+        invalid["timestamp"] = json!("not-a-timestamp");
+        let valid = make_event(Uuid::new_v4(), "cursor", "s3", "valid", "macA");
+
+        let log_file = write_events(&[missing, invalid, valid]);
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let filters = ExportFilters {
+            after: Some("2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()),
+            ..Default::default()
+        };
+
+        let stats = export_log(log_file.path(), &filters, output.path()).unwrap();
+        assert_eq!(stats.exported, 1);
+        assert_eq!(stats.skipped, 2);
     }
 
     #[test]

@@ -95,4 +95,8 @@ impl Harvester {
         self.log_writer.write(log).await?;
         Ok(())
     }
+
+    pub async fn flush_logs(&self) -> Result<()> {
+        self.log_writer.flush().await
+    }
 }
