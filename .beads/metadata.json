@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "contrail",
-  "project_id": "4d3d69d5-65c6-4562-b44f-47499ebc2ac1"
-}
