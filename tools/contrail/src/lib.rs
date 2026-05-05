@@ -219,13 +219,12 @@ fn stop_process(run_dir: &Path, process: ManagedProcess) -> Result<()> {
         return Ok(());
     }
 
-    let _ = send_signal(pid, None)?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if !is_pid_running(pid) {
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
+    let _ = send_signal(pid, Some("-INT"))?;
+    wait_until_stopped(pid, Duration::from_secs(5));
+
+    if is_pid_running(pid) {
+        let _ = send_signal(pid, None)?;
+        wait_until_stopped(pid, Duration::from_secs(2));
     }
 
     if is_pid_running(pid) {
@@ -258,7 +257,12 @@ fn print_process_status(run_dir: &Path, process: ManagedProcess) {
 
 fn read_pid(pid_path: &Path) -> Option<u32> {
     let raw = fs::read_to_string(pid_path).ok()?;
-    raw.trim().parse::<u32>().ok()
+    parse_pid(&raw)
+}
+
+fn parse_pid(raw: &str) -> Option<u32> {
+    let pid = raw.trim().parse::<u32>().ok()?;
+    (pid > 0).then_some(pid)
 }
 
 fn is_pid_running(pid: u32) -> bool {
@@ -284,6 +288,16 @@ fn send_signal(pid: u32, signal: Option<&str>) -> Result<bool> {
         .status()
         .with_context(|| format!("failed to send signal to pid {}", pid))?;
     Ok(status.success())
+}
+
+fn wait_until_stopped(pid: u32, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !is_pid_running(pid) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn wait_for_health(name: &str, addr: &str) -> bool {
@@ -323,7 +337,7 @@ fn resolve_binary_path(process: ManagedProcess) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LifecycleCommand, parse_lifecycle_command};
+    use super::{LifecycleCommand, parse_lifecycle_command, parse_pid};
     use std::ffi::OsString;
 
     #[test]
@@ -351,5 +365,17 @@ mod tests {
     fn leaves_other_commands_for_importer_cli() {
         let args = vec![OsString::from("contrail"), OsString::from("import-history")];
         assert!(parse_lifecycle_command(&args).is_none());
+    }
+
+    #[test]
+    fn parse_pid_accepts_trimmed_positive_pid() {
+        assert_eq!(parse_pid(" 42\n"), Some(42));
+    }
+
+    #[test]
+    fn parse_pid_rejects_invalid_or_zero_pid() {
+        assert_eq!(parse_pid("not-a-pid"), None);
+        assert_eq!(parse_pid("0"), None);
+        assert_eq!(parse_pid(""), None);
     }
 }

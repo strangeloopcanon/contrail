@@ -8,12 +8,21 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::path::Path;
 use std::path::PathBuf;
 
 pub fn load_dataset(log_path: &Path, day_filter: Option<NaiveDate>) -> Result<Dataset> {
-    let file = File::open(log_path).context("open master_log.jsonl")?;
+    let file = match File::open(log_path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Ok(Dataset {
+                sessions: Vec::new(),
+                day_filter,
+            });
+        }
+        Err(e) => return Err(e).context("open master_log.jsonl"),
+    };
     let reader = BufReader::new(file);
     let mut logs = Vec::new();
 
@@ -359,4 +368,22 @@ fn project_root_from_path(raw: &str) -> Option<String> {
     }
 
     Some(path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_dataset;
+
+    #[test]
+    fn load_dataset_treats_missing_log_as_empty_dataset() {
+        let path = std::env::temp_dir().join(format!(
+            "contrail-analysis-missing-log-{}-{}.jsonl",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+
+        let dataset = load_dataset(&path, None).expect("missing log should be readable as empty");
+        assert!(dataset.sessions.is_empty());
+        assert!(dataset.day_filter.is_none());
+    }
 }

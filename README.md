@@ -164,10 +164,13 @@ Each machine builds its own log. To combine them:
 contrail export-log -o ~/Desktop/contrail-export.jsonl
 
 # Machine B: merge (stop daemon first)
+contrail down
 contrail merge-log ~/Desktop/contrail-export.jsonl
 ```
 
 Re-running merge is safe -- it deduplicates by event ID and content fingerprint.
+`merge-log` refuses to run while the Contrail daemon is active through either
+the macOS LaunchAgent or `contrail up`.
 
 ## Privacy
 

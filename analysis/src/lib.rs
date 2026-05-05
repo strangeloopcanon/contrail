@@ -175,27 +175,13 @@ const DEFAULT_PROBES: &[&str] = &[
 ];
 
 pub async fn run() -> anyhow::Result<()> {
-    let log_path = env::var("CONTRAIL_LOG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(".contrail/logs/master_log.jsonl")
-        });
-    let memory_path = env::var("CONTRAIL_MEMORY_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(".contrail/analysis/memories.jsonl")
-        });
-    let memory_blocks_path = env::var("CONTRAIL_MEMORY_BLOCKS_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(".contrail/analysis/memory_blocks.json")
-        });
+    let log_path = env_path_or_home("CONTRAIL_LOG_PATH", ".contrail/logs/master_log.jsonl")?;
+    let memory_path =
+        env_path_or_home("CONTRAIL_MEMORY_PATH", ".contrail/analysis/memories.jsonl")?;
+    let memory_blocks_path = env_path_or_home(
+        "CONTRAIL_MEMORY_BLOCKS_PATH",
+        ".contrail/analysis/memory_blocks.json",
+    )?;
 
     let initial_dataset = ingest::load_dataset(&log_path, None)?;
     let state = AppState {
@@ -246,6 +232,15 @@ pub async fn run() -> anyhow::Result<()> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+fn env_path_or_home(key: &str, home_relative: &str) -> anyhow::Result<PathBuf> {
+    if let Ok(value) = env::var(key) {
+        return Ok(PathBuf::from(value));
+    }
+
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not find home directory"))?;
+    Ok(home.join(home_relative))
 }
 
 async fn index() -> Html<&'static str> {

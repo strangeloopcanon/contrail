@@ -148,9 +148,11 @@ pub async fn run() -> anyhow::Result<()> {
     claude_handle.abort();
     claude_projects_handle.abort();
 
-    drop(harvester);
+    if let Err(e) = harvester.flush_logs().await {
+        warn!(err = ?e, "failed to flush log writer during shutdown");
+    }
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    drop(harvester);
 
     info!("contrail daemon stopped");
     Ok(())

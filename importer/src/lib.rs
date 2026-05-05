@@ -7,9 +7,11 @@ use scrapers::claude_profile_import::{
 use scrapers::config::ContrailConfig;
 use scrapers::history_import;
 use scrapers::merge::{self, ExportFilters};
-use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process::Command;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
 #[derive(Parser)]
 #[command(
@@ -182,7 +184,7 @@ fn run_merge(file: PathBuf) -> Result<()> {
     let config = ContrailConfig::from_env()?;
 
     if is_contrail_daemon_running() {
-        anyhow::bail!("com.contrail.daemon is running; stop it before merge");
+        anyhow::bail!("contrail daemon is running; stop it before merge");
     }
 
     println!(
@@ -324,8 +326,59 @@ fn parse_optional_ts(value: Option<&str>, flag_name: &str) -> Result<Option<Date
     }
 }
 
-#[cfg(target_os = "macos")]
 fn is_contrail_daemon_running() -> bool {
+    is_managed_core_daemon_running() || is_launch_agent_running()
+}
+
+fn is_managed_core_daemon_running() -> bool {
+    let Some(run_dir) = contrail_run_dir() else {
+        return false;
+    };
+    is_managed_core_daemon_running_in(&run_dir)
+}
+
+fn is_managed_core_daemon_running_in(run_dir: &Path) -> bool {
+    let pid_path = run_dir.join("core_daemon.pid");
+    read_pid(&pid_path).is_some_and(is_pid_running)
+}
+
+fn contrail_run_dir() -> Option<PathBuf> {
+    if let Some(root) = env::var_os("CONTRAIL_HOME") {
+        return Some(PathBuf::from(root).join("run"));
+    }
+
+    env::var_os("HOME").map(|home| PathBuf::from(home).join(".contrail/run"))
+}
+
+fn read_pid(pid_path: &Path) -> Option<u32> {
+    let raw = fs::read_to_string(pid_path).ok()?;
+    parse_pid(&raw)
+}
+
+fn parse_pid(raw: &str) -> Option<u32> {
+    let pid = raw.trim().parse::<u32>().ok()?;
+    (pid > 0).then_some(pid)
+}
+
+#[cfg(unix)]
+fn is_pid_running(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_pid_running(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn is_launch_agent_running() -> bool {
     Command::new("launchctl")
         .arg("list")
         .arg("com.contrail.daemon")
@@ -335,7 +388,7 @@ fn is_contrail_daemon_running() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn is_contrail_daemon_running() -> bool {
+fn is_launch_agent_running() -> bool {
     false
 }
 
@@ -354,6 +407,45 @@ mod tests {
         let err = parse_optional_ts(Some("not-a-timestamp"), "--after").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("invalid --after timestamp"));
+    }
+
+    #[test]
+    fn parse_pid_accepts_trimmed_positive_pid() {
+        assert_eq!(parse_pid(" 12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn parse_pid_rejects_invalid_or_zero_pid() {
+        assert_eq!(parse_pid("not-a-pid"), None);
+        assert_eq!(parse_pid("0"), None);
+        assert_eq!(parse_pid(""), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_daemon_check_detects_running_pid_file() {
+        let run_dir = temp_run_dir("running-pid");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("core_daemon.pid"),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+
+        assert!(is_managed_core_daemon_running_in(&run_dir));
+
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
+    fn managed_daemon_check_ignores_invalid_pid_file() {
+        let run_dir = temp_run_dir("invalid-pid");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(run_dir.join("core_daemon.pid"), "not-a-pid\n").unwrap();
+
+        assert!(!is_managed_core_daemon_running_in(&run_dir));
+
+        let _ = fs::remove_dir_all(run_dir);
     }
 
     #[test]
@@ -396,5 +488,16 @@ mod tests {
             panic!("expected import-claude");
         };
         assert!(dry_run);
+    }
+
+    fn temp_run_dir(label: &str) -> PathBuf {
+        let mut dir = env::temp_dir();
+        dir.push(format!(
+            "contrail-importer-tests-{}-{}-{}",
+            label,
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        dir
     }
 }
