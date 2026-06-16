@@ -188,6 +188,10 @@ the macOS LaunchAgent or `contrail up`.
 
 Everything is local. Redaction covers common API keys, tokens, JWTs, and emails, but treat logs as sensitive anyway. `memex init` gitignores plaintext sessions; use `memex share` / `memex unlock` for encrypted team sharing via `.context/vault.age`.
 
+## License
+
+MIT. See [LICENSE](LICENSE).
+
 <details>
 <summary>Data model</summary>
 
