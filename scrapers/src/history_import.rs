@@ -2,6 +2,7 @@ use crate::claude::{parse_claude_line, parse_claude_session_line};
 use crate::codex::parse_codex_line;
 use crate::config::ContrailConfig;
 use crate::cursor::{read_cursor_messages, timestamp_from_metadata};
+use crate::deepseek_harness::{parse_event as parse_dsh_event, read_transcript, source_instance};
 use crate::parse::parse_timestamp_value;
 use crate::sentry::Sentry;
 use crate::types::{Interaction, MasterLog};
@@ -85,6 +86,15 @@ pub fn import_history(config: &ContrailConfig) -> Result<ImportStats> {
             &mut stats,
         )?;
     }
+    if config.enable_dsh {
+        import_dsh_root(
+            &config.dsh_sessions,
+            &mut writer,
+            &sentry,
+            &mut existing,
+            &mut stats,
+        )?;
+    }
 
     writer.flush().context("flush master log writer")?;
     Ok(stats)
@@ -116,6 +126,92 @@ fn import_codex_root(
         if let Err(e) = import_codex_file(&path, writer, sentry, existing, stats) {
             tracing::warn!(path = ?path, err = %e, "import codex file failed");
             stats.errors += 1;
+        }
+    }
+    Ok(())
+}
+
+fn import_dsh_root(
+    root: &Path,
+    writer: &mut dyn Write,
+    sentry: &Sentry,
+    existing: &mut HashSet<u64>,
+    stats: &mut ImportStats,
+) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let instance = source_instance(root);
+    let mut paths = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.path().to_path_buf())
+        .filter(|path| {
+            matches!(
+                path.file_name().and_then(|value| value.to_str()),
+                Some("session.jsonl" | "session.jsonl.zstd")
+            )
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    for path in paths {
+        let transcript = match read_transcript(&path) {
+            Ok(transcript) => transcript,
+            Err(error) => {
+                tracing::warn!(path = ?path, err = %error, "import DSH transcript failed");
+                stats.errors += 1;
+                continue;
+            }
+        };
+        for event in transcript.events {
+            let Some(mut parsed) = parse_dsh_event(&transcript.header, &event) else {
+                continue;
+            };
+            let Some(seq) = parsed.metadata.get("dsh_event_seq").and_then(Value::as_u64) else {
+                stats.errors += 1;
+                continue;
+            };
+            let key = dsh_dedupe_key(&instance, &transcript.header.id, seq);
+            if existing.contains(&key) {
+                stats.skipped += 1;
+                continue;
+            }
+
+            let (content, flags) = sentry.scan_and_redact(&parsed.content);
+            parsed
+                .metadata
+                .insert("imported".to_string(), Value::Bool(true));
+            parsed.metadata.insert(
+                "dsh_source_instance".to_string(),
+                Value::String(instance.clone()),
+            );
+            let log = MasterLog {
+                event_id: Uuid::new_v4(),
+                timestamp: parsed.timestamp.unwrap_or_else(Utc::now),
+                source_tool: crate::deepseek_harness::SOURCE_TOOL.to_string(),
+                project_context: parsed
+                    .project_context
+                    .unwrap_or_else(|| "DeepSeek Harness Session".to_string()),
+                session_id: transcript.header.id.clone(),
+                interaction: Interaction {
+                    role: parsed.role,
+                    content,
+                    artifacts: None,
+                },
+                security_flags: flags,
+                metadata: Value::Object(parsed.metadata),
+            };
+            if log.validate_schema().is_ok() {
+                writeln!(writer, "{}", serde_json::to_string(&log)?)?;
+                existing.insert(key);
+                stats.imported += 1;
+            } else {
+                stats.errors += 1;
+            }
         }
     }
     Ok(())
@@ -931,31 +1027,49 @@ fn extract_timestamp(value: &Value) -> Option<DateTime<Utc>> {
 
 fn load_existing_keys(path: &Path) -> Result<HashSet<u64>> {
     let mut keys = HashSet::new();
-    if !path.exists() {
-        return Ok(keys);
-    }
-    let file = fs::File::open(path)?;
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line?;
-        let Ok(json) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let source = json
-            .get("source_tool")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let session = json.get("session_id").and_then(Value::as_str).unwrap_or("");
-        let content = json
-            .pointer("/interaction/content")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if source.is_empty() || session.is_empty() {
-            continue;
+    for log_path in crate::log_index::discover_logs(path)? {
+        let reader = BufReader::new(fs::File::open(log_path)?);
+        for line in reader.lines() {
+            let line = line?;
+            let Ok(json) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let source = json
+                .get("source_tool")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let session = json.get("session_id").and_then(Value::as_str).unwrap_or("");
+            let content = json
+                .pointer("/interaction/content")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if source.is_empty() || session.is_empty() {
+                continue;
+            }
+            if source == crate::deepseek_harness::SOURCE_TOOL {
+                if let (Some(instance), Some(seq)) = (
+                    json.pointer("/metadata/dsh_source_instance")
+                        .and_then(Value::as_str),
+                    json.pointer("/metadata/dsh_event_seq")
+                        .and_then(Value::as_u64),
+                ) {
+                    keys.insert(dsh_dedupe_key(instance, session, seq));
+                    continue;
+                }
+            }
+            keys.insert(dedupe_key(source, session, content));
         }
-        keys.insert(dedupe_key(source, session, content));
     }
     Ok(keys)
+}
+
+fn dsh_dedupe_key(instance: &str, session: &str, seq: u64) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    crate::deepseek_harness::SOURCE_TOOL.hash(&mut h);
+    instance.hash(&mut h);
+    session.hash(&mut h);
+    seq.hash(&mut h);
+    h.finish()
 }
 
 fn dedupe_key(source: &str, session: &str, content: &str) -> u64 {
@@ -964,4 +1078,77 @@ fn dedupe_key(source: &str, session: &str, content: &str) -> u64 {
     session.hash(&mut h);
     content.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dsh_import_redacts_payloads_and_deduplicates_by_native_sequence() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let session_dir = temp.path().join("--tmp-project--/session-1");
+        fs::create_dir_all(&session_dir)?;
+        fs::write(
+            session_dir.join("session.jsonl"),
+            concat!(
+                "{\"type\":\"session\",\"version\":0,\"id\":\"session-1\",\"createdAt\":1783600629539,\"cwd\":\"/tmp/project\",\"delegationDepth\":0}\n",
+                "{\"type\":\"tool/call\",\"seq\":0,\"time\":1783600629540,\"data\":{\"turn\":1,\"step\":1,\"callId\":\"call-1\",\"name\":\"bash\",\"arguments\":\"token=sk-abcdefghijklmnopqrstuvwxyz email=user@example.com\"}}\n",
+                "{\"type\":\"turn/end\",\"seq\":1,\"time\":1783600629541,\"data\":{\"turn\":1,\"reason\":{\"kind\":\"completed\"}}}\n"
+            ),
+        )?;
+
+        let mut existing = HashSet::new();
+        let mut output = Vec::new();
+        let mut first = ImportStats::default();
+        import_dsh_root(
+            temp.path(),
+            &mut output,
+            &Sentry::new(),
+            &mut existing,
+            &mut first,
+        )?;
+        assert_eq!(first.imported, 2);
+        let rendered = String::from_utf8(output)?;
+        assert!(!rendered.contains("sk-abcdefghijklmnopqrstuvwxyz"));
+        assert!(!rendered.contains("user@example.com"));
+        assert!(rendered.contains("[REDACTED]"));
+
+        let mut repeated_output = Vec::new();
+        let mut repeated = ImportStats::default();
+        import_dsh_root(
+            temp.path(),
+            &mut repeated_output,
+            &Sentry::new(),
+            &mut existing,
+            &mut repeated,
+        )?;
+        assert_eq!(repeated.imported, 0);
+        assert_eq!(repeated.skipped, 2);
+        assert!(repeated_output.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn existing_keys_include_rotated_master_logs() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let current = temp.path().join("master_log.jsonl");
+        fs::write(&current, "")?;
+        let archived = temp.path().join("master_log.20260820T010000Z.jsonl");
+        fs::write(
+            archived,
+            serde_json::to_string(&serde_json::json!({
+                "source_tool": crate::deepseek_harness::SOURCE_TOOL,
+                "session_id": "session-1",
+                "interaction": { "content": "event" },
+                "metadata": {
+                    "dsh_source_instance": "instance-1",
+                    "dsh_event_seq": 42
+                }
+            }))? + "\n",
+        )?;
+        let keys = load_existing_keys(&current)?;
+        assert!(keys.contains(&dsh_dedupe_key("instance-1", "session-1", 42)));
+        Ok(())
+    }
 }

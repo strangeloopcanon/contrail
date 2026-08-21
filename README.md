@@ -1,6 +1,6 @@
 # Contrail
 
-Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, and Gemini into a single timeline with secret/PII redaction. Nothing is uploaded anywhere.
+Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single timeline with secret/PII redaction. Nothing is uploaded anywhere.
 
 ## Install
 
@@ -88,6 +88,24 @@ Dashboard lookback modes:
 - `Last 24h`, `Last 7d`, `Last 30d`, `Last 365d`, `All Time`
 
 Historical windows read both `master_log.jsonl` and rotated archives, so older data stays visible after rotation.
+
+### DeepSeek Harness capture
+
+The daemon watches DeepSeek Harness's native rc.8 session root and reads both
+the default append-only `session.jsonl.zstd` format and uncompressed
+`session.jsonl`. It records canonical user and assistant messages, exact
+provider/model request provenance, tool call/result pairs, token counters, and
+turn outcomes. Native session IDs, lineage, turn/step numbers, and event
+sequence numbers stay available as metadata for downstream trajectory
+compilers. Credentials and complete request headers are never copied; captured
+message and tool payloads pass through the normal secret/PII redactor.
+
+The live watcher resumes from durable sequence watermarks in the current and
+rotated Contrail logs, so it also captures events written while the daemon was
+stopped. To backfill explicitly, run `contrail import-history`; re-running it
+is safe because DSH records deduplicate by source instance, session ID, and
+native event sequence. Contrail retains canonical messages and lifecycle
+events rather than private reasoning or packed streaming deltas.
 
 **Explain a commit:**
 
@@ -218,10 +236,10 @@ Contrail writes an append-only JSONL log to `~/.contrail/logs/master_log.jsonl`.
 All paths and behaviour are overrideable via environment variables.
 
 **Paths:**
-`CONTRAIL_LOG_PATH` (default `~/.contrail/logs/master_log.jsonl`), `CONTRAIL_CURSOR_STORAGE`, `CONTRAIL_CODEX_ROOT`, `CONTRAIL_CLAUDE_HISTORY`, `CONTRAIL_CLAUDE_PROJECTS`, `CONTRAIL_ANTIGRAVITY_BRAIN`
+`CONTRAIL_LOG_PATH` (default `~/.contrail/logs/master_log.jsonl`), `CONTRAIL_CURSOR_STORAGE`, `CONTRAIL_CODEX_ROOT`, `CONTRAIL_CLAUDE_HISTORY`, `CONTRAIL_CLAUDE_PROJECTS`, `CONTRAIL_ANTIGRAVITY_BRAIN`, `CONTRAIL_DSH_SESSIONS` (default `$DSH_HOME/sessions`, otherwise `~/.dsh/sessions`)
 
 **Feature flags:**
-`CONTRAIL_ENABLE_CURSOR`, `CONTRAIL_ENABLE_CODEX`, `CONTRAIL_ENABLE_CLAUDE`, `CONTRAIL_ENABLE_ANTIGRAVITY` (all default `true`)
+`CONTRAIL_ENABLE_CURSOR`, `CONTRAIL_ENABLE_CODEX`, `CONTRAIL_ENABLE_CLAUDE`, `CONTRAIL_ENABLE_ANTIGRAVITY`, `CONTRAIL_ENABLE_DSH` (all default `true`)
 
 **Timing:**
 `CONTRAIL_CURSOR_SILENCE_SECS` (5), `CONTRAIL_CODEX_SILENCE_SECS` (3), `CONTRAIL_CLAUDE_SILENCE_SECS` (5)
@@ -237,7 +255,7 @@ When `master_log.jsonl` exceeds the max size at daemon startup, Contrail rotates
 **Logging:** `RUST_LOG=info` (or `debug`, etc.)
 
 **Default watch locations (macOS):**
-Cursor (`~/Library/Application Support/Cursor/User/workspaceStorage`), Codex (`~/.codex/sessions`), Claude (`~/.claude`), Gemini/Antigravity (`~/.gemini/antigravity/brain`)
+Cursor (`~/Library/Application Support/Cursor/User/workspaceStorage`), Codex (`~/.codex/sessions`), Claude (`~/.claude`), Gemini/Antigravity (`~/.gemini/antigravity/brain`), DeepSeek Harness (`$DSH_HOME/sessions` or `~/.dsh/sessions`)
 
 </details>
 

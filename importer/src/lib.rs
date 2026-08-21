@@ -25,7 +25,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Import historical logs from Codex, Claude, Cursor, and Antigravity native storage (one-time backfill).
+    /// Import historical logs from Codex, Claude, Cursor, Antigravity, and DeepSeek Harness native storage.
     ImportHistory,
 
     /// Export the master log (or a filtered subset) to a portable JSONL file.
@@ -46,7 +46,7 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
 
-        /// Filter by source tool (cursor, codex-cli, claude-code, antigravity).
+        /// Filter by source tool (cursor, codex-cli, claude-code, antigravity, deepseek-harness).
         #[arg(long)]
         tool: Option<String>,
 
@@ -140,7 +140,9 @@ pub fn run() -> Result<()> {
 
 fn run_import_history() -> Result<()> {
     println!("Contrail History Importer");
-    println!("Scanning for historical logs (Codex, Claude, Cursor, Antigravity)...");
+    println!(
+        "Scanning for historical logs (Codex, Claude, Cursor, Antigravity, DeepSeek Harness)..."
+    );
 
     let config = ContrailConfig::from_env()?;
     let stats = history_import::import_history(&config)?;

@@ -2,6 +2,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod cursor;
+mod deepseek_harness;
 
 use crate::config::ContrailConfig;
 use crate::log_writer::LogWriter;
@@ -57,10 +58,7 @@ impl Harvester {
         if role == "assistant" {
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 if let Ok(clip_text) = clipboard.get_text() {
-                    let threshold = 20; // min chars to check
-                    let copied = (clean_content.len() > threshold
-                        && clip_text.contains(&clean_content[..threshold]))
-                        || clean_content == clip_text;
+                    let copied = content_was_copied(&clean_content, &clip_text);
                     if copied {
                         metadata.insert(
                             "copied_to_clipboard".to_string(),
@@ -98,5 +96,30 @@ impl Harvester {
 
     pub async fn flush_logs(&self) -> Result<()> {
         self.log_writer.flush().await
+    }
+}
+
+fn content_was_copied(content: &str, clipboard: &str) -> bool {
+    const PREFIX_CHARS: usize = 20;
+    if content == clipboard {
+        return true;
+    }
+    let mut chars = content.chars();
+    let prefix = chars.by_ref().take(PREFIX_CHARS).collect::<String>();
+    chars.next().is_some() && clipboard.contains(&prefix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_was_copied;
+
+    #[test]
+    fn clipboard_prefix_check_is_utf8_safe() {
+        let content = "The graph exporter’s default path remains local.";
+        assert!(content_was_copied(
+            content,
+            "prefix: The graph exporter’s default path"
+        ));
+        assert!(!content_was_copied(content, "different clipboard text"));
     }
 }

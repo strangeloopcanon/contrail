@@ -58,6 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
     let enable_codex = config.enable_codex;
     let enable_antigravity = config.enable_antigravity;
     let enable_claude = config.enable_claude;
+    let enable_dsh = config.enable_dsh;
 
     let harvester = Arc::new(Harvester::new(log_writer, config));
 
@@ -135,7 +136,22 @@ pub async fn run() -> anyhow::Result<()> {
         }
     });
 
-    if !(enable_cursor || enable_codex || enable_antigravity || enable_claude) {
+    let h6 = harvester.clone();
+    let dsh_handle = task::spawn(async move {
+        if !enable_dsh {
+            info!("DeepSeek Harness watcher disabled");
+            return;
+        }
+        loop {
+            if let Err(e) = h6.run_deepseek_harness_watcher().await {
+                error!(err = ?e, "DeepSeek Harness watcher failed");
+            }
+            warn!("DeepSeek Harness watcher exited; restarting in 2s");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+
+    if !(enable_cursor || enable_codex || enable_antigravity || enable_claude || enable_dsh) {
         warn!("all watchers are disabled; daemon will stay idle until shutdown");
     }
 
@@ -147,6 +163,7 @@ pub async fn run() -> anyhow::Result<()> {
     antigravity_handle.abort();
     claude_handle.abort();
     claude_projects_handle.abort();
+    dsh_handle.abort();
 
     if let Err(e) = harvester.flush_logs().await {
         warn!(err = ?e, "failed to flush log writer during shutdown");
@@ -168,7 +185,7 @@ fn maybe_import_history(config: &ContrailConfig) {
         return;
     }
 
-    info!("backfilling historical codex/claude logs (one-time)");
+    info!("backfilling historical AI session logs (one-time)");
     match history_import::import_history(config) {
         Ok(stats) => {
             info!(
@@ -192,6 +209,7 @@ fn maybe_import_history(config: &ContrailConfig) {
                 "log_path": config.log_path,
                 "codex_root": config.codex_root,
                 "claude_history": config.claude_history,
+                "dsh_sessions": config.dsh_sessions,
             });
             let _ = fs::write(
                 &marker_path,
