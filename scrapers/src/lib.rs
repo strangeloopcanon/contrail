@@ -3,6 +3,7 @@ pub mod claude_profile_import;
 pub mod codex;
 pub mod config;
 pub mod cursor;
+pub mod deepseek_harness;
 pub mod history_import;
 pub mod learnings;
 pub mod log_index;

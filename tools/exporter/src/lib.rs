@@ -29,7 +29,7 @@ pub fn run() -> Result<()> {
 
         if !matches!(
             json.get("source_tool").and_then(Value::as_str),
-            Some("codex-cli" | "cursor" | "claude-code" | "antigravity")
+            Some("codex-cli" | "cursor" | "claude-code" | "antigravity" | "deepseek-harness")
         ) {
             continue;
         }

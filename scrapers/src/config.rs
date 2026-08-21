@@ -22,6 +22,9 @@ const DEFAULT_CLAUDE_PROJECTS_REL: &str = ".claude/projects";
 /// Antigravity brain directory relative to home.
 const DEFAULT_ANTIGRAVITY_BRAIN_REL: &str = ".gemini/antigravity/brain";
 
+/// DeepSeek Harness sessions directory relative to its home.
+const DEFAULT_DSH_SESSIONS_REL: &str = ".dsh/sessions";
+
 /// History import completion marker relative to home.
 pub const HISTORY_IMPORT_MARKER_REL: &str = ".contrail/state/history_import_done.json";
 
@@ -43,10 +46,12 @@ pub struct ContrailConfig {
     pub claude_history: PathBuf,
     pub claude_projects: PathBuf,
     pub antigravity_brain: PathBuf,
+    pub dsh_sessions: PathBuf,
     pub enable_cursor: bool,
     pub enable_codex: bool,
     pub enable_claude: bool,
     pub enable_antigravity: bool,
+    pub enable_dsh: bool,
     pub cursor_silence_secs: u64,
     pub codex_silence_secs: u64,
     pub claude_silence_secs: u64,
@@ -89,10 +94,12 @@ impl ContrailConfig {
                 home.join(DEFAULT_ANTIGRAVITY_BRAIN_REL),
                 home.as_path(),
             ),
+            dsh_sessions: dsh_sessions_path(home.as_path()),
             enable_cursor: env_bool("CONTRAIL_ENABLE_CURSOR", true),
             enable_codex: env_bool("CONTRAIL_ENABLE_CODEX", true),
             enable_claude: env_bool("CONTRAIL_ENABLE_CLAUDE", true),
             enable_antigravity: env_bool("CONTRAIL_ENABLE_ANTIGRAVITY", true),
+            enable_dsh: env_bool("CONTRAIL_ENABLE_DSH", true),
             cursor_silence_secs: env_u64(
                 "CONTRAIL_CURSOR_SILENCE_SECS",
                 DEFAULT_CURSOR_SILENCE_SECS,
@@ -106,6 +113,20 @@ impl ContrailConfig {
             log_keep_files: env_usize("CONTRAIL_LOG_KEEP_FILES", DEFAULT_LOG_KEEP_FILES),
         })
     }
+}
+
+fn dsh_sessions_path(home: &std::path::Path) -> PathBuf {
+    if let Ok(value) = env::var("CONTRAIL_DSH_SESSIONS") {
+        if !value.trim().is_empty() {
+            return expand_tilde(&value, home);
+        }
+    }
+    if let Ok(value) = env::var("DSH_HOME") {
+        if !value.trim().is_empty() {
+            return expand_tilde(&value, home).join("sessions");
+        }
+    }
+    home.join(DEFAULT_DSH_SESSIONS_REL)
 }
 
 fn env_path(key: &str, default: PathBuf, home: &std::path::Path) -> PathBuf {
