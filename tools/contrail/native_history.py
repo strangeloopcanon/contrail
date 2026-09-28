@@ -675,7 +675,8 @@ def handoff(run, include_base=True, cloud_parent_id=None, cloud_owner=None):
     data = {'run_id': manifest['run_id'], 'parent_folder_id': destination['parent_id'], 'owner': destination['owner'],
             'files': files, 'required_base_runs': [m['run_id'] for _, m in archive_chain(run)[0][:-1]], 'workflow': 'Verify private parent owner; create dated child; upload in listed order; '
             'read back parents/permissions/size/checksums; write cloud receipt. Retry by remote ID and checksum, '
-            'never blindly duplicate a completed upload. Keep local parts until byte-level cloud verification.'}
+            'never blindly duplicate a completed upload. Keep local parts until release-local validates the chosen policy: '
+            'checksum verification by default, or explicitly accepted provider upload integrity with --accept-size-only.'}
     write_json(run / 'cloud-handoff.json', data)
     return data
 

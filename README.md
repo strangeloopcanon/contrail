@@ -1,8 +1,9 @@
 # Contrail
 
-Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single timeline with secret/PII redaction. Capture stays local.
+Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Contrail does two separate jobs:
 
-`contrail history` separately backs up native Codex, Cursor and Claude Code histories with verified archives, incremental backups via `--base-run`, and a configurable private cloud handoff. Archive parts can be released locally under an explicit verification policy while retaining metadata for the next comparison. Catalog browsing and selective recovery planning work without downloading archived payloads. See [the history archival guide](tools/contrail/HISTORY-ARCHIVAL.md) and [coverage, recovery and retention limits](tools/contrail/NATIVE-HISTORY.md). Native history deletion remains disabled.
+- **Redacted capture and repo context.** The daemon records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single local timeline with secret/PII redaction. `memex` pulls recent sessions into a repo's `.context/` folder for agents. Capture stays local.
+- **Unredacted native history preservation.** `contrail history` archives the original Codex, Cursor and Claude Code history files as verified snapshots, so you keep them even if the apps prune them. These archives are not redacted. They stay on your machine unless you upload them to storage you choose. See [Native history archives](#native-history-archives).
 
 ## Install
 
@@ -115,6 +116,42 @@ events rather than private reasoning or packed streaming deltas.
 memex explain abc123    # which sessions produced this diff?
 ```
 
+## Native history archives
+
+`contrail history` preserves supported native history from Codex, Cursor and Claude Code, including original transcripts and coherent history-only SQLite snapshots. It does not use the daemon or the redacted master log, and it never changes live app histories. Each run is a folder of numbered compressed parts, plus a manifest, hashes and a verification receipt. Catalog browsing, restore planning and selected extraction require `contrail-cli` 0.1.7 or `contrails` 0.1.6 or later.
+
+```bash
+# Full archive of all installed default-profile apps (output must be outside app profiles)
+contrail history backup --output /path/to/snapshots
+
+# Incremental: store only files that are new or changed since a previous sibling run
+contrail history backup --output /path/to/snapshots --base-run /path/to/snapshots/PREVIOUS-RUN
+
+# Browse the latest retained files using local metadata only
+contrail history catalog --run /path/to/snapshots/LATEST-RUN --app claude-code --contains SESSION-ID
+
+# See which runs and parts one file needs; reads metadata only and downloads nothing
+contrail history restore-plan --run /path/to/snapshots/LATEST-RUN \
+  --member .claude/projects/PROJECT/SESSION-ID.jsonl
+
+# After the listed parts are back in their run folders, extract into a new folder
+contrail history extract --run /path/to/snapshots/LATEST-RUN \
+  --member .claude/projects/PROJECT/SESSION-ID.jsonl \
+  --destination /path/to/new-recovery-folder
+```
+
+**Cloud storage.** Contrail has no built-in cloud login. Each run can produce a `cloud-handoff.json` upload list for a private Google Drive folder. An external, authenticated connector workflow uploads the files and supplies evidence of the upload, which `contrail history record-cloud` validates. `contrail history release-local` then removes that run's generated local archive parts. By default, release requires remote checksums for every file. `--accept-size-only` is an explicit lower-assurance policy: it relies on the provider's upload integrity after size, parent folder and private permissions match, and records that choice. Manifests, receipts and catalog metadata stay local for the next incremental and for restore planning. Backup and upload also need temporary local scratch space and the current run's parts until release.
+
+**Limits.**
+
+- Native history deletion remains disabled. `retention-plan` only previews, and `retention-apply` refuses to run.
+- Importing restored files into the native apps and resuming conversations there is untested. Extraction writes only to a new folder.
+- Selection is by file, not by conversation. Contrail does not infer dependencies such as tool outputs, subagents, indexes or attachments. Add known dependencies with repeated `--member`. A SQLite database can hold many chats.
+- Each run is a single compressed stream split into parts. Recovering even one small file needs every part of each origin run listed by `restore-plan`.
+- The archive format is unchanged. `verify` checks the whole chain, and `extract` without `--member` restores it as before.
+
+Read the [history archival guide](tools/contrail/HISTORY-ARCHIVAL.md) for a walkthrough and [coverage, recovery and retention limits](tools/contrail/NATIVE-HISTORY.md) before relying on an archive.
+
 ## Dev Workflow
 
 Use interface contract targets:
@@ -206,7 +243,9 @@ the macOS LaunchAgent or `contrail up`.
 
 ## Privacy
 
-Everything is local. Redaction covers common API keys, tokens, JWTs, and emails, but treat logs as sensitive anyway. `memex init` gitignores plaintext sessions; use `memex share` / `memex unlock` for encrypted team sharing via `.context/vault.age`.
+Session capture and memex context stay local and are redacted. Redaction covers common API keys, tokens, JWTs, and emails, but treat logs as sensitive anyway. `memex init` gitignores plaintext sessions; use `memex share` / `memex unlock` for encrypted team sharing via `.context/vault.age`.
+
+Native history archives are different. They preserve original transcripts and databases without redaction, so they can contain pasted secrets and personal data. Contrail does not encrypt them. They stay local unless you explicitly upload them; an upload sends those original contents to the storage you chose, so use a private destination you control.
 
 ## License
 

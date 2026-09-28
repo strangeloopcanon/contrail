@@ -1,8 +1,22 @@
 # Preserve coding history without keeping every backup on your laptop
 
-Contrail can preserve supported native histories from Codex, Cursor and Claude Code as immutable snapshots. Later runs store only new or changed files. Upload the snapshots to storage you control, then release generated local archive parts under your chosen verification policy. Small local catalogs and receipts support the next comparison and recovery planning.
+Contrail can preserve supported native histories from Codex, Cursor and Claude Code as immutable snapshots. Later runs store only new or changed files. Upload the snapshots to storage you control through an external authenticated connector workflow, then release generated local archive parts under your chosen verification policy. Small local catalogs and receipts support the next comparison and recovery planning.
 
-This guide describes the local development change. Catalog browsing and selective recovery must be included in a published package before these commands work in an older installed release.
+Catalog browsing, restore planning and selected extraction arrive in `contrail-cli` 0.1.7 and `contrails` 0.1.6. Older installed releases do not have these commands. The archive format is unchanged, and whole-chain `verify` and `extract` work as before.
+
+These snapshots are not the redacted Contrail capture log. They keep original transcripts and databases, which can contain pasted secrets, and Contrail does not encrypt them.
+
+## Back up, upload, release local parts
+
+```sh
+contrail history backup --output /path/to/snapshots
+contrail history backup --output /path/to/snapshots \
+  --base-run /path/to/snapshots/PREVIOUS-RUN
+```
+
+The first run is a full baseline; `--base-run` stores only files that are new or changed since a sibling run. With a private Drive folder configured, each run writes `cloud-handoff.json`, the list of files to upload. Contrail has no built-in cloud login. An authenticated connector uploads those files and writes a receipt, which `contrail history record-cloud` validates.
+
+`contrail history release-local --run RUN` then removes that run's generated archive parts. By default, it requires remote checksums for every uploaded file. Adding `--accept-size-only` explicitly relies on provider upload integrity once size, parent folder and private permissions match; the release receipt records that policy. Manifests, receipts and the catalog stay local. Backup and upload still need temporary local scratch space and the current run's parts until release. Keep every referenced remote run: later incrementals and recovery depend on them.
 
 ## Recover only what you need
 
@@ -30,7 +44,7 @@ contrail history extract --run /path/to/snapshots/LATEST-RUN \
   --destination /path/to/new-recovery-folder
 ```
 
-Repeat `--member` for additional files and known dependencies. Extraction validates the required archives and writes selected files into a new folder. It does not overwrite a running app's profile or import a conversation. SQLite stores may contain many conversations; file selection is not chat selection.
+Repeat `--member` for additional files and known dependencies; Contrail does not infer tool outputs, subagents, indexes or attachments a transcript needs. Extraction validates the required archives and writes selected files into a new folder. It does not overwrite a running app's profile or import a conversation, and importing or resuming restored files in the native app is untested. SQLite stores may contain many conversations; file selection is not chat selection.
 
 ## What works, and what comes next
 
