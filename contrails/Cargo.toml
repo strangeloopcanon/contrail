@@ -1,6 +1,6 @@
 [package]
 name = "contrails"
-version = "0.1.4"
+version = "0.1.6"
 edition = "2024"
 description = "All-in-one installer for Contrail: local-first flight recorder for AI coding sessions"
 license = "MIT"
@@ -39,7 +39,7 @@ name = "wrapup"
 path = "src/bin/wrapup.rs"
 
 [dependencies]
-contrail-cli = { path = "../tools/contrail", version = "0.1.5" }
+contrail-cli = { path = "../tools/contrail", version = "0.1.7" }
 contrail-memex = { path = "../tools/memex", version = "0.1.4" }
 core_daemon = { path = "../core_daemon", version = "0.1.4" }
 contrail-dashboard = { path = "../dashboard", version = "0.1.4" }

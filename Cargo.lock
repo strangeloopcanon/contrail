@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "contrail-cli"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "importer",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "contrails"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "analysis",
  "anyhow",

@@ -22,6 +22,8 @@ coverage/
 # Logs and temp files
 *.log
 *.tmp
+__pycache__/
+*.py[cod]
 
 # Generated wrapup reports (local artifacts)
 export/wrapup_*.html
