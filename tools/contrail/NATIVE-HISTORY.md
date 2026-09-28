@@ -41,7 +41,7 @@ The authenticated Google Drive connector supplies upload authority. Contrail sto
 2. Upload each listed part, manifest, restore guide and verification receipt with the connector. Journal each returned ID immediately. Retry by reading the saved ID and checking name/parent/bytes/checksum; never blindly create duplicates.
 3. Read back owner, permissions, parents and size. Compare provider SHA256/MD5 if exposed; otherwise download only this run's bounded files and hash them. Size alone is not checksum verification. Do not download old multi-GB backups.
 4. Save authenticated evidence in the receipt shape below. Run `contrail history record-cloud --run RUN --receipt FILE`. It validates one-to-one complete coverage, local correspondence and remote checksum fields; remote evidence remains connector/operator supplied.
-5. Upload `cloud-receipt.json`. Only after remote checksum coverage, run `contrail history release-local --run RUN`, then upload `local-release.json`. Size-only evidence blocks release. Parts are removed; compact manifests/receipts remain.
+5. Upload `cloud-receipt.json`. Only after remote checksum coverage, run `contrail history release-local --run RUN`, then upload `local-release.json`. Size-only evidence blocks release unless `--accept-size-only` is explicitly selected. Parts are removed; manifests/receipts remain. If you explicitly choose to rely on provider upload confirmations instead of remote checksum comparison, use `release-local --accept-size-only`. This requires complete matching upload-size/parent/private-permission evidence, records that lower-assurance choice, and allows later incrementals to use the released cloud parent. The default still requires checksums; the flag does not claim byte-level remote verification.
 
 ```json
 {
@@ -55,7 +55,7 @@ The authenticated Google Drive connector supplies upload authority. Contrail sto
 }
 ```
 
-Include every handoff file in the receipt. Missing checksums yield size-only evidence; wrong checksums are rejected. Receipts are trusted connector/operator evidence, not independent cryptographic attestations. This orchestration is the cloud backend; this is not a standalone unattended OAuth client. Incremental runs omit unchanged files when given a compatible verified native-history base; older unrelated backup formats are not supported.
+Include every handoff file in the receipt. Missing checksums yield size-only evidence; wrong checksums are rejected even when size-only release is accepted. Receipts are trusted connector/operator evidence, not independent cryptographic attestations. This orchestration is the cloud backend; this is not a standalone unattended OAuth client. Incremental runs omit unchanged files when given a compatible verified native-history base; older unrelated backup formats are not supported.
 
 ## Retention and migration
 
@@ -63,6 +63,6 @@ Policy is **30 days since last activity**, protecting running, pinned, automatio
 
 For recurring backup, maintain one full baseline followed by `--base-run` incrementals. Scan all supported histories each time: a rolling date filter can miss updates to older conversations. A narrower source list with the same app scope retains omitted baseline files, but filtering the contents of a transcript or database can discard older records from its latest restored version. Contrail does not merge rows from separately generated rolling-window exports.
 
-Keep all referenced remote runs. After authenticated remote checksum verification, release local archive parts; retain manifests, verification receipts, cloud handoffs and upload receipts for comparison and recovery. Released parents are validated using their checksum receipts and bound metadata, so subsequent incrementals do not require downloading their archive parts. Temporary local scratch and current-run parts are required during creation, upload and verification; cloud-only means no permanent local archive copy. Size-only upload evidence blocks release.
+Keep all referenced remote runs. After authenticated remote checksum verification, release local archive parts; retain manifests, verification receipts, cloud handoffs and upload receipts for comparison and recovery. Released parents are validated using their checksum receipts and bound metadata, so subsequent incrementals do not require downloading their archive parts. Temporary local scratch and current-run parts are required during creation, upload and verification; cloud-only means no permanent local archive copy. Size-only upload evidence blocks release by default. Explicit `--accept-size-only` relies on provider upload integrity, records the policy in a bound release receipt, and avoids download readback. Do not download archives just to compare their size; use authenticated metadata. Required metadata stays local; it is much smaller than payload archives but can grow with the catalog.
 
 `make check` supplies formatting/clippy; `make test` runs disposable Python fixtures through a Rust test. LLM live tests are not applicable to this archive path. Native cleanup remains disabled until a supported protection-aware deletion interface exists.

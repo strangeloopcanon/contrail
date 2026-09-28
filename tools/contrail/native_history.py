@@ -425,11 +425,14 @@ def verified_base(folder):
     if not all((folder / part['name']).is_file() for part in manifest['parts']):
         # Released baselines need remote checksums tied to the retained manifest
         # and verification bytes, including older receipts without manifest_sha256.
-        verified_cloud_archive(folder, manifest)
+        verified_cloud_archive(folder, manifest, allow_released_size_only=True)
     elif not bound:
         # Verify legacy local bytes without changing metadata already uploaded.
         check_cloud_parents(folder, require_remote=False)
         receipt = verify(folder, include_base=False)
+    for directory, parent_manifest in chain[:-1]:
+        if not all((directory / part['name']).is_file() for part in parent_manifest['parts']):
+            verified_cloud_archive(directory, parent_manifest, allow_released_size_only=True)
     return manifest, catalog
 
 
@@ -567,26 +570,55 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
         lock.unlink(missing_ok=True)
 
 
-def verified_cloud_archive(directory, manifest):
-    receipt = json.loads(regular_path(directory / 'cloud-receipt.json').read_text())
-    validated = validate_cloud(directory, receipt, allow_missing_parts=True)
-    if validated['verification_level'] not in ('md5', 'sha256'):
-        raise ValueError('base remote bytes not checksum verified; retain local parts')
+def release_bindings(directory):
+    return {name: digest_file(regular_path(directory / name))
+            for name in ('manifest.json', 'cloud-receipt.json', 'cloud-handoff.json')}
+
+
+def authorized_size_only_release(directory, manifest):
+    path = directory / 'local-release.json'
+    if not path.exists():
+        return False
+    release = json.loads(regular_path(path).read_text())
+    if (release.get('release_policy') != 'provider-upload-integrity'
+            or release.get('accept_size_only') is not True
+            or release.get('verification_level') != 'size-only'):
+        return False
+    if (release.get('bindings') != release_bindings(directory)
+            or release.get('removed_parts') != [part['name'] for part in manifest['parts']]):
+        raise ValueError('size-only release authorization evidence changed')
+    return True
+
+
+def check_local_verification(directory, manifest):
     verification = json.loads(regular_path(directory / 'verification.json').read_text())
     if (verification.get('status') != 'verified'
             or verification.get('archive_sha256') != manifest['archive_sha256']
             or ('manifest_sha256' in verification
                 and verification['manifest_sha256'] != digest_file(directory / 'manifest.json'))):
-        raise ValueError('base verification does not match manifest')
+        raise ValueError('verification does not match manifest')
 
 
-def check_cloud_parents(run, require_remote=True):
+def verified_cloud_archive(directory, manifest, accept_size_only=False, allow_released_size_only=False):
+    receipt = json.loads(regular_path(directory / 'cloud-receipt.json').read_text())
+    validated = validate_cloud(directory, receipt, allow_missing_parts=True)
+    if validated['verification_level'] not in ('md5', 'sha256'):
+        missing_parts = any(not (directory / part['name']).is_file() for part in manifest['parts'])
+        authorized = authorized_size_only_release(directory, manifest)
+        if (not (accept_size_only or (allow_released_size_only and authorized))
+                or (missing_parts and not authorized)):
+            raise ValueError('base remote bytes not checksum verified; retain local parts or require bound size-only authorization')
+    check_local_verification(directory, manifest)
+
+
+def check_cloud_parents(run, require_remote=True, accept_size_only=False):
     """Revalidate parent remote bytes, or available local bytes for a handoff."""
     for directory, manifest in archive_chain(run)[0][:-1]:
         if not require_remote and all((directory / p['name']).is_file() for p in manifest['parts']):
             verify_archive(directory)
             continue
-        verified_cloud_archive(directory, manifest)
+        verified_cloud_archive(directory, manifest, accept_size_only=accept_size_only,
+                               allow_released_size_only=not require_remote)
 
 
 def handoff(run, include_base=True, cloud_parent_id=None, cloud_owner=None):
@@ -674,33 +706,42 @@ def record_cloud(run, receipt_path):
     return receipt
 
 
-def release_local(run):
+def release_local(run, accept_size_only=False):
     run = Path(run).absolute()
+    policy = 'provider-upload-integrity' if accept_size_only else 'checksums-required'
     if (run / 'local-release.json').is_file():
         result = json.loads(regular_path(run / 'local-release.json').read_text())
         if any((run / name).exists() for name in result['removed_parts']):
             raise ValueError('released archive parts unexpectedly reappeared')
+        if result.get('verification_level') == 'size-only':
+            manifest = json.loads(regular_path(run / 'manifest.json').read_text())
+            if not authorized_size_only_release(run, manifest):
+                raise ValueError('size-only release authorization missing')
         return result
     manifest = json.loads((run / 'manifest.json').read_text())
     pending = run / 'local-release.pending.json'
-    bindings = ('manifest.json', 'cloud-receipt.json', 'cloud-handoff.json')
     if pending.exists():
         intent = json.loads(regular_path(pending).read_text())
-        if intent['bindings'] != {name: digest_file(regular_path(run / name)) for name in bindings}:
+        if intent.get('release_policy', 'checksums-required') != policy:
+            raise ValueError('interrupted release requires the same explicit release policy')
+        if intent['bindings'] != release_bindings(run):
             raise ValueError('release evidence changed after interruption')
         if intent['parts'] != manifest['parts']:
             raise ValueError('release intent does not match manifest')
-        receipt = json.loads(regular_path(run / 'cloud-receipt.json').read_text())
-        check_cloud_parents(run)
+        receipt = validate_cloud(run, json.loads(regular_path(run / 'cloud-receipt.json').read_text()), allow_missing_parts=True)
+        check_cloud_parents(run, accept_size_only=accept_size_only)
     else:
         receipt = record_cloud(run, run / 'cloud-receipt.json')
-        if receipt.get('verification_level') not in ('md5', 'sha256'):
+        if receipt.get('verification_level') not in ('md5', 'sha256') and not accept_size_only:
             raise ValueError('remote bytes not checksum verified; retain local parts')
-        check_cloud_parents(run)
-        verify(run, include_base=False)
-        intent = {'parts': manifest['parts'], 'bindings': {name: digest_file(regular_path(run / name)) for name in bindings}}
+        check_cloud_parents(run, accept_size_only=accept_size_only)
+        # Handoff validation already binds the verification receipt, manifest,
+        # and every part; avoid repeating SQLite extraction before removal.
+        check_local_verification(run, manifest)
+        intent = {'parts': manifest['parts'], 'bindings': release_bindings(run),
+                  'release_policy': policy, 'accept_size_only': accept_size_only}
         write_json(pending, intent)
-    if receipt.get('verification_level') not in ('md5', 'sha256'):
+    if receipt.get('verification_level') not in ('md5', 'sha256') and not accept_size_only:
         raise ValueError('remote bytes not checksum verified; retain local parts')
     removed = []
     for part in manifest['parts']:
@@ -715,7 +756,8 @@ def release_local(run):
             path.unlink()
         removed.append(part['name'])
     data = {'released_utc': utc(), 'removed_parts': removed, 'cloud_receipt': 'cloud-receipt.json',
-            'verification_level': receipt['verification_level'], 'native_histories_deleted': 0}
+            'verification_level': receipt['verification_level'], 'native_histories_deleted': 0,
+            'release_policy': policy, 'accept_size_only': accept_size_only, 'bindings': intent['bindings']}
     write_json(run / 'local-release.json', data)
     pending.unlink()
     return data
@@ -768,6 +810,9 @@ def main():
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to recorded configuration or CONTRAIL_HISTORY_CLOUD_OWNER')
         if name == 'record-cloud':
             command.add_argument('--receipt', type=Path, required=True)
+        if name == 'release-local':
+            command.add_argument('--accept-size-only', action='store_true',
+                                 help='explicitly trust provider upload integrity after private metadata and size confirmation')
     commands.add_parser('retention-apply', help='fails closed until native protection/apply support is available')
     args = parser.parse_args()
     if args.command in ('inventory', 'dry-run'):
@@ -799,7 +844,7 @@ def main():
     elif args.command == 'record-cloud':
         result = record_cloud(args.run, args.receipt)
     else:
-        result = release_local(args.run)
+        result = release_local(args.run, accept_size_only=args.accept_size_only)
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

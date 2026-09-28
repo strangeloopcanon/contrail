@@ -64,6 +64,12 @@ class NativeHistoryTests(unittest.TestCase):
         path.write_text(json.dumps(receipt))
         return history.record_cloud(run, path)
 
+    def size_only_receipt(self, run):
+        receipt = self.cloud_receipt(run)
+        for item in receipt["files"]:
+            item.pop("sha256")
+        return receipt
+
     def archive_fixture(self, members, records=None, truncate=0):
         """Write internally checksummed hostile archives to exercise content checks."""
         run = self.root / "hostile"
@@ -519,6 +525,96 @@ class NativeHistoryTests(unittest.TestCase):
                     self.record(run, receipt)
                 self.assertTrue(all(part.exists() for part in self.parts(run)))
         self.assertFalse((run / "cloud-receipt.json").exists())
+
+    def test_size_only_release_requires_explicit_opt_in_and_records_bindings(self):
+        source = self.source("session.jsonl")
+        run = self.backup([source])
+        self.record(run, self.size_only_receipt(run))
+        with self.assertRaisesRegex(ValueError, "checksum verified"):
+            history.release_local(run)
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+        with mock.patch.object(history, "verify", side_effect=AssertionError("release repeated archive extraction")):
+            result = history.release_local(run, accept_size_only=True)
+        self.assertEqual(result["verification_level"], "size-only")
+        self.assertEqual(result["release_policy"], "provider-upload-integrity")
+        self.assertTrue(result["accept_size_only"])
+        self.assertEqual(result["bindings"], history.release_bindings(run))
+        self.assertFalse(any(part.exists() for part in self.parts(run)))
+        self.assertEqual(Path(source["path"]).read_bytes(), b"fixture")
+        self.assertEqual(history.release_local(run), result)
+
+    def test_incremental_continuation_from_authorized_size_only_released_base(self):
+        source = self.source("session.jsonl", b"base")
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        history.release_local(base, accept_size_only=True)
+        Path(source["path"]).write_bytes(b"delta")
+        run = self.backup([source], base_run=base)
+        self.assertEqual(history.handoff(run)["required_base_runs"], [base.name])
+        self.record(run, self.cloud_receipt(run))
+        with self.assertRaisesRegex(ValueError, "checksum verified"):
+            history.release_local(run)
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+        result = history.release_local(run, accept_size_only=True)
+        self.assertEqual(result["release_policy"], "provider-upload-integrity")
+        self.assertFalse(any(part.exists() for part in self.parts(run)))
+
+    def test_size_only_released_base_requires_unchanged_authorization_bindings(self):
+        source = self.source("session.jsonl", b"base")
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        history.release_local(base, accept_size_only=True)
+        Path(source["path"]).write_bytes(b"delta")
+        run = self.backup([source], base_run=base)
+        self.record(run, self.cloud_receipt(run))
+        release_path = base / "local-release.json"
+        original = json.loads(release_path.read_text())
+        release = json.loads(json.dumps(original))
+        release["bindings"]["manifest.json"] = "changed-binding"
+        release_path.write_text(json.dumps(release))
+        for operation in (lambda: self.backup([source], base_run=base),
+                          lambda: history.handoff(run),
+                          lambda: history.release_local(run, accept_size_only=True)):
+            with self.assertRaisesRegex(ValueError, "authorization evidence changed"):
+                operation()
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+        release_path.write_text(json.dumps(original))
+        receipt_path = base / "cloud-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["recorded_utc"] = "changed"
+        receipt_path.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(ValueError, "authorization evidence changed"):
+            history.handoff(run)
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+
+    def test_missing_base_parts_cannot_use_unapproved_size_only_receipt(self):
+        source = self.source("session.jsonl", b"base")
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        for part in self.parts(base):
+            part.unlink()
+        with self.assertRaisesRegex(ValueError, "checksum verified"):
+            self.backup([source], base_run=base)
+
+    def test_interrupted_size_only_release_requires_same_explicit_policy(self):
+        run = self.backup([self.source("session.jsonl", bytes(range(256)) * 4)], part_bytes=64)
+        parts = self.parts(run)
+        self.record(run, self.size_only_receipt(run))
+        original = Path.unlink
+        def interrupt_second_part(path, *args, **kwargs):
+            if path == parts[1]:
+                raise KeyboardInterrupt("fixture interruption")
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, "unlink", interrupt_second_part):
+            with self.assertRaises(KeyboardInterrupt):
+                history.release_local(run, accept_size_only=True)
+        self.assertFalse(parts[0].exists())
+        with self.assertRaisesRegex(ValueError, "same explicit release policy"):
+            history.release_local(run)
+        self.assertTrue(parts[1].exists())
+        result = history.release_local(run, accept_size_only=True)
+        self.assertEqual(result["verification_level"], "size-only")
+        self.assertFalse(any(part.exists() for part in parts))
 
     def test_release_recomputes_cloud_evidence_instead_of_trusting_stale_level(self):
         source = self.source("session.jsonl")
