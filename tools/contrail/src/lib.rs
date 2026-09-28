@@ -41,11 +41,39 @@ const PROCS_STOP_ORDER: [ManagedProcess; 3] = [PROC_ANALYSIS, PROC_DASHBOARD, PR
 
 pub fn run() -> Result<()> {
     let args: Vec<OsString> = env::args_os().collect();
+    if args.get(1).and_then(|s| s.to_str()) == Some("history") {
+        return run_native_history(&args[2..]);
+    }
+    if matches!(args.get(1).and_then(|s| s.to_str()), Some("--help" | "-h")) {
+        println!("Native app backups: contrail history --help\n");
+    }
     if let Some(cmd) = parse_lifecycle_command(&args) {
         return run_lifecycle_command(cmd);
     }
 
     importer::run()
+}
+
+// Embed the stdlib-only snapshot engine so installed binaries do not depend on
+// a checkout. Python supplies SQLite's online backup API without extra crates.
+fn run_native_history(args: &[OsString]) -> Result<()> {
+    let engine = concat!(
+        include_str!("../native_sources.py"),
+        "\n",
+        include_str!("../native_retention.py"),
+        "\n",
+        include_str!("../native_history.py")
+    );
+    let status = Command::new("python3")
+        .arg("-c")
+        .arg(engine)
+        .args(args)
+        .status()
+        .context("native history backup requires Python 3 with sqlite3")?;
+    if !status.success() {
+        bail!("native history command failed ({status})");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -339,6 +367,29 @@ fn resolve_binary_path(process: ManagedProcess) -> Result<PathBuf> {
 mod tests {
     use super::{LifecycleCommand, parse_lifecycle_command, parse_pid};
     use std::ffi::OsString;
+
+    #[test]
+    fn native_history_fixtures() {
+        let status = std::process::Command::new("python3")
+            .args([
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                env!("CARGO_MANIFEST_DIR"),
+                "-p",
+                "test_native_*.py",
+                "-v",
+            ])
+            .status()
+            .expect("Python 3 with sqlite3 is required for native history fixtures");
+        assert!(status.success(), "native history fixtures failed");
+    }
+
+    #[test]
+    fn native_history_embedded_help() {
+        super::run_native_history(&[OsString::from("--help")]).unwrap();
+    }
 
     #[test]
     fn parses_lifecycle_commands() {

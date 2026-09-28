@@ -1,6 +1,8 @@
 # Contrail
 
-Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single timeline with secret/PII redaction. Nothing is uploaded anywhere.
+Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single timeline with secret/PII redaction. Capture stays local.
+
+`contrail history` separately backs up native Codex, Cursor and Claude Code histories with verified archives, incremental backups via `--base-run`, and a configurable private cloud handoff. After remote checksum verification, archive parts can be released locally while retaining manifests for the next comparison. See [coverage, recovery and retention limits](tools/contrail/NATIVE-HISTORY.md). Native history deletion remains disabled.
 
 ## Install
 
@@ -220,7 +222,7 @@ Contrail writes an append-only JSONL log to `~/.contrail/logs/master_log.jsonl`.
   "event_id": "550e8400-e29b-41d4-a716-446655440000",
   "timestamp": "2025-11-22T10:00:00Z",
   "source_tool": "cursor",
-  "project_context": "/Users/rohit/dev/my-app",
+  "project_context": "/path/to/my-app",
   "session_id": "7a125a...",
   "interaction": { "role": "assistant", "content": "..." },
   "security_flags": { "has_pii": true, "redacted_secrets": ["openai_key"] },
