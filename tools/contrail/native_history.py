@@ -305,7 +305,23 @@ def manifest_parts(folder, manifest):
     return paths
 
 
-def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=False):
+class _ExpandedReader:
+    """Bound decompression including TAR headers and trailing padding."""
+
+    def __init__(self, stream, limit):
+        self.stream = stream
+        self.remaining = limit
+
+    def read(self, size=-1):
+        wanted = self.remaining + 1 if size < 0 else min(size, self.remaining + 1)
+        data = self.stream.read(wanted)
+        self.remaining -= len(data)
+        if self.remaining < 0:
+            raise ValueError('decompressed archive exceeds bounded TAR allowance')
+        return data
+
+
+def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=False, members=None):
     folder = Path(folder).absolute()
     manifest = json.loads(regular_path(folder / 'manifest.json').read_text())
     paths = manifest_parts(folder, manifest)
@@ -315,8 +331,17 @@ def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=Fals
         if member['name'] in expected or member['bytes'] < 0:
             raise ValueError('duplicate or invalid manifest member')
         expected[member['name']] = member
+    if members is not None:
+        members = set(members)
+        if not members or not members.issubset(expected):
+            raise ValueError('selected archive members must exist in manifest')
     if sum(m['bytes'] for m in expected.values()) > max_bytes:
         raise ValueError('expanded archive exceeds verification budget')
+    # Each file allows regular and PAX headers, rounded file data, and a
+    # path-sized PAX payload. Archive record padding is bounded separately.
+    # The manifest byte budget must not permit an unbounded gzip padding tail.
+    tar_allowance = 10240 + sum(2048 + 512 * ((len(name.encode('utf-8')) + 256 + 511) // 512)
+                                for name in expected)
     seen = set()
     last_progress = time.monotonic()
     if len(expected) > 1000:
@@ -325,7 +350,8 @@ def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=Fals
     with tempfile.TemporaryDirectory(prefix='verify-', dir=folder) as scratch:
         with io.BufferedReader(PartReader(paths)) as raw:
             with gzip.GzipFile(fileobj=raw, mode='rb') as compressed:
-                with tarfile.open(fileobj=compressed, mode='r|') as archive:
+                expanded = _ExpandedReader(compressed, sum(m['bytes'] for m in expected.values()) + tar_allowance)
+                with tarfile.open(fileobj=expanded, mode='r|') as archive:
                     for member in archive:
                         safe_name(member.name)
                         if not member.isfile() or member.name in seen or member.name not in expected:
@@ -335,7 +361,8 @@ def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=Fals
                             raise ValueError('member size mismatch')
                         seen.add(member.name)
                         target = None
-                        if extract_to:
+                        materialize = extract_to is not None and (members is None or member.name in members)
+                        if materialize:
                             target = Path(extract_to).joinpath(*safe_name(member.name).parts)
                             target.parent.mkdir(parents=True, exist_ok=True)
                             if overlay and target.exists():
@@ -356,13 +383,13 @@ def verify_archive(folder, extract_to=None, max_bytes=64 * 1024**3, overlay=Fals
                             with contextlib.closing(sqlite3.connect(target.as_uri() + '?mode=ro', uri=True)) as db:
                                 if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                                     raise ValueError('restored SQLite integrity failure')
-                            if not extract_to:
+                            if not materialize:
                                 target.unlink()
                         if len(expected) > 1000 and time.monotonic() - last_progress >= 30:
                             progress_event('native_archive_verification_progress', verified_files=len(seen), total_files=len(expected))
                             last_progress = time.monotonic()
                 # Consume gzip footer; detect corrupt/truncated data after the tar terminator.
-                while compressed.read(1024 * 1024):
+                while expanded.read(1024 * 1024):
                     pass
     if seen != set(expected):
         raise ValueError('missing archive members')
@@ -545,10 +572,16 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
             manifest['base'] = {'run_id': prior['run_id'], 'manifest_sha256': digest_file(Path(base_run) / 'manifest.json')}
         write_json(run / 'manifest.json', manifest)
         (run / 'RESTORE.md').write_text(
-            '# Native history recovery\n\nDownload every referenced base run and this run into sibling folders named by run ID, with each run’s numbered parts and manifest.json together. '
+            '# Native history recovery\n\nFor full recovery, download every referenced base run and this run into sibling folders named by run ID, with each run’s numbered parts and manifest.json together. '
             'Run `contrail history verify --run FOLDER`, then '
             '`contrail history extract --run FOLDER --destination NEW_EMPTY_PATH`. '
             'Extraction verifies every byte and SQLite integrity. It never overwrites a profile.\n\n'
+            'For selected files, use `contrail history catalog --run FOLDER`, then '
+            '`contrail history restore-plan --run FOLDER --member EXACT_NAME`. Planning reads only metadata and does not download. '
+            'Keep the complete manifest chain, but fetch only the origin runs listed by the plan, with all their parts. '
+            '`contrail history extract --run FOLDER --member EXACT_NAME --destination NEW_EMPTY_PATH` '
+            'verifies those archives and extracts selected latest files. Repeat --member for known dependencies. '
+            'A database can contain multiple chats; selection is by file, not conversation.\n\n'
             'Files are located under their original home-relative paths. Preserve all files together, '
             'including transcript tools/media dependencies and indexes. Native per-chat import and full '
             'profile recovery have NOT been tested. For version-specific profile recovery, first preserve '
@@ -783,6 +816,25 @@ def extract(run, destination):
     return {'destination': str(destination), **receipt}
 
 
+def list_catalog(run, app=None, contains=None, limit=100, offset=0):
+    """Browse retained file metadata without opening archives or live histories."""
+    if type(limit) is not int or not 1 <= limit <= 1000 or type(offset) is not int or offset < 0:
+        raise ValueError('catalog limit must be 1..1000 and offset must be nonnegative')
+    chain, catalog = archive_chain(run)
+    records = sorted((record for record in catalog.values()
+                      if (app is None or record['app'] == app)
+                      and (contains is None or contains in record['name'])),
+                     key=lambda record: record['name'])
+    page = records[offset:offset + limit]
+    return {'run_id': chain[-1][1]['run_id'], 'chain_runs': len(chain),
+            'matched_files': len(records), 'offset': offset, 'limit': limit,
+            'next_offset': offset + len(page) if offset + len(page) < len(records) else None,
+            'files': [{key: record[key] for key in ('name', 'app', 'bytes', 'sha256', 'sqlite', 'origin_run_id')}
+                      for record in page],
+            'verification': 'manifest chain correspondence only; archive payloads not read',
+            'downloads_performed': 0}
+
+
 def main():
     parser = argparse.ArgumentParser(prog='contrail history', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -800,11 +852,22 @@ def main():
             command.add_argument('--cloud-parent-id', help='private Drive parent folder ID; defaults to CONTRAIL_HISTORY_CLOUD_PARENT')
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to CONTRAIL_HISTORY_CLOUD_OWNER')
             command.add_argument('--app', action='append', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code'), help='explicit partial app scope; omit for all installed apps')
-    for name in ('verify', 'extract', 'cloud-handoff', 'record-cloud', 'release-local'):
+    for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'release-local'):
         command = commands.add_parser(name)
         command.add_argument('--run', type=Path, required=True)
         if name == 'extract':
             command.add_argument('--destination', type=Path, required=True)
+            command.add_argument('--member', action='append', help='exact catalog name; repeat to extract selected files only')
+            command.add_argument('--max-expanded-mib', type=int, default=65536,
+                                 help='selected recovery: expanded byte budget across required origin archives')
+        if name == 'restore-plan':
+            command.add_argument('--member', action='append', required=True,
+                                 help='exact catalog name; repeat to plan selected files without downloading')
+        if name == 'catalog':
+            command.add_argument('--app', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code'))
+            command.add_argument('--contains', help='case-sensitive substring of home-relative file name')
+            command.add_argument('--limit', type=int, default=100)
+            command.add_argument('--offset', type=int, default=0)
         if name == 'cloud-handoff':
             command.add_argument('--cloud-parent-id', help='private Drive parent folder ID; defaults to recorded configuration or CONTRAIL_HISTORY_CLOUD_PARENT')
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to recorded configuration or CONTRAIL_HISTORY_CLOUD_OWNER')
@@ -838,7 +901,17 @@ def main():
     elif args.command == 'verify':
         result = verify(args.run)
     elif args.command == 'extract':
-        result = extract(args.run, args.destination)
+        if args.member:
+            result = extract_selected(args.run, args.destination, args.member,
+                                      max_bytes=args.max_expanded_mib * 1024**2)
+        else:
+            if args.max_expanded_mib != 65536:
+                raise ValueError('--max-expanded-mib requires --member')
+            result = extract(args.run, args.destination)
+    elif args.command == 'restore-plan':
+        result = restore_plan(args.run, args.member)
+    elif args.command == 'catalog':
+        result = list_catalog(args.run, args.app, args.contains, args.limit, args.offset)
     elif args.command == 'cloud-handoff':
         result = handoff(args.run, cloud_parent_id=args.cloud_parent_id, cloud_owner=args.cloud_owner)
     elif args.command == 'record-cloud':
@@ -846,6 +919,10 @@ def main():
     else:
         result = release_local(args.run, accept_size_only=args.accept_size_only)
     print(json.dumps(result, indent=2, sort_keys=True))
+
+
+if 'restore_plan' not in globals():
+    from native_restore import restore_plan, extract_selected
 
 
 if __name__ == '__main__':

@@ -9,6 +9,9 @@ contrail history backup --output /absolute/path/outside-live-profiles
 contrail history backup --output /absolute/path/outside-live-profiles --base-run /absolute/path/outside-live-profiles/PREVIOUS-RUN
 contrail history verify --run /absolute/path/UTC-RUN
 contrail history extract --run /absolute/path/UTC-RUN --destination /absolute/path/new-folder
+contrail history catalog --run /absolute/path/UTC-RUN --app claude-code --contains projects/
+contrail history restore-plan --run /absolute/path/UTC-RUN --member .claude/projects/PROJECT/SESSION.jsonl
+contrail history extract --run /absolute/path/UTC-RUN --destination /absolute/path/new-folder --member .claude/projects/PROJECT/SESSION.jsonl
 contrail history retention-plan
 ```
 
@@ -33,13 +36,23 @@ Earlier archives are immutable. Missing local files stay in the cumulative catal
 
 Creation accepts a manifest-bound verification receipt for its base without rereading old archives, allowing earlier parts to have been uploaded and released locally. Legacy receipts without manifest binding require a full base verification once. Receipts are trusted local evidence; a delta alone is not proof that remote parent bytes still exist. Upload the new run's handoff files and retain all prior remote runs: they are required for recovery. To start a self-contained new baseline, omit `--base-run`; it covers current local sources, not history already deleted locally.
 
+## Selective recovery
+
+`catalog` lists the latest retained file metadata, including files no longer present in live storage. It reads only the local manifest chain. Filter by `--app` or a case-sensitive `--contains` substring; paginate with `--limit` (1–1000, default 100) and `--offset`. Copy exact `name` values into repeatable `--member` arguments.
+
+`restore-plan --member NAME` identifies the origin runs, numbered archive parts, expected hashes and download sizes needed for the selected latest versions. It works after local archive release and performs no downloads. Remote IDs, when available, are locations from saved upload receipts, not a fresh check that remote bytes still exist. Preserve the complete manifest chain in sibling run folders; only the selected origin runs need archive payloads for selective extraction.
+
+Download payloads only when you explicitly want recovery. One run is a single gzip/tar stream split into parts, so every part of a required origin run is needed even for one small file; this is not a random-access archive format. `extract --member NAME` verifies all part, archive and member hashes and SQLite integrity in those origin runs, then writes only selected files into a new private destination. It never downloads automatically. `--max-expanded-mib` (default 65536) bounds the aggregate expanded member data in required origin runs, including unselected files that must be checked. Decompression also has a bounded allowance for TAR headers and padding. Without `--member`, the existing whole-chain extraction behavior is unchanged. Do not modify archive metadata, parts or destination parents during recovery; the checks do not defend against a hostile actor with access to the same local account.
+
+Selection is by file, not by native conversation: a SQLite database can hold many chats, and transcripts can reference tool outputs, subagents, indexes and attachments. Contrail does not infer a complete dependency closure or import files into an application. Include known dependencies explicitly and consult adapter limits. Restoring one file proves its bytes are recoverable; it does not prove a conversation can resume in its original app.
+
 ## Connected private Drive handoff
 
 The authenticated Google Drive connector supplies upload authority. Contrail stores no OAuth credentials. Configure your private folder and expected owner with `--cloud-parent-id FOLDER_ID --cloud-owner OWNER_EMAIL` on backup or cloud-handoff. You can also set `CONTRAIL_HISTORY_CLOUD_PARENT` and `CONTRAIL_HISTORY_CLOUD_OWNER`. Without this configuration, backups remain local until you generate a handoff. No personal destination is built into the package.
 
 1. Run backup and read `cloud-handoff.json`, the ordered upload list. Verify the exact private parent and owner. Create a dated child named for the run, or reuse the verified child recorded for that run.
 2. Upload each listed part, manifest, restore guide and verification receipt with the connector. Journal each returned ID immediately. Retry by reading the saved ID and checking name/parent/bytes/checksum; never blindly create duplicates.
-3. Read back owner, permissions, parents and size. Compare provider SHA256/MD5 if exposed; otherwise download only this run's bounded files and hash them. Size alone is not checksum verification. Do not download old multi-GB backups.
+3. Read back owner, permissions, parents and size. Compare provider SHA256/MD5 if exposed. If unavailable, retain local parts or explicitly choose the size-only policy below. Downloads are not an automatic verification step. Size alone is not checksum verification.
 4. Save authenticated evidence in the receipt shape below. Run `contrail history record-cloud --run RUN --receipt FILE`. It validates one-to-one complete coverage, local correspondence and remote checksum fields; remote evidence remains connector/operator supplied.
 5. Upload `cloud-receipt.json`. Only after remote checksum coverage, run `contrail history release-local --run RUN`, then upload `local-release.json`. Size-only evidence blocks release unless `--accept-size-only` is explicitly selected. Parts are removed; manifests/receipts remain. If you explicitly choose to rely on provider upload confirmations instead of remote checksum comparison, use `release-local --accept-size-only`. This requires complete matching upload-size/parent/private-permission evidence, records that lower-assurance choice, and allows later incrementals to use the released cloud parent. The default still requires checksums; the flag does not claim byte-level remote verification.
 

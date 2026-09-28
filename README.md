@@ -2,7 +2,7 @@
 
 Local-first flight recorder for AI coding sessions, plus a per-repo context layer. Records sessions from Codex, Claude Code, Cursor, Gemini, and DeepSeek Harness into a single timeline with secret/PII redaction. Capture stays local.
 
-`contrail history` separately backs up native Codex, Cursor and Claude Code histories with verified archives, incremental backups via `--base-run`, and a configurable private cloud handoff. After remote checksum verification, archive parts can be released locally while retaining manifests for the next comparison. See [coverage, recovery and retention limits](tools/contrail/NATIVE-HISTORY.md). Native history deletion remains disabled.
+`contrail history` separately backs up native Codex, Cursor and Claude Code histories with verified archives, incremental backups via `--base-run`, and a configurable private cloud handoff. Archive parts can be released locally under an explicit verification policy while retaining metadata for the next comparison. Catalog browsing and selective recovery planning work without downloading archived payloads. See [the history archival guide](tools/contrail/HISTORY-ARCHIVAL.md) and [coverage, recovery and retention limits](tools/contrail/NATIVE-HISTORY.md). Native history deletion remains disabled.
 
 ## Install
 

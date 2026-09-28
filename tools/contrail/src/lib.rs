@@ -62,6 +62,8 @@ fn run_native_history(args: &[OsString]) -> Result<()> {
         "\n",
         include_str!("../native_retention.py"),
         "\n",
+        include_str!("../native_restore.py"),
+        "\n",
         include_str!("../native_history.py")
     );
     let status = Command::new("python3")
