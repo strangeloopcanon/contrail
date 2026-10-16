@@ -9,6 +9,7 @@ performed by this module. Cursor deletion is also unsupported.
 """
 
 import datetime
+import json
 import math
 import re
 import sqlite3
@@ -50,10 +51,31 @@ def _retention_within(path, home):
         return False
 
 
+def _retention_parent_ids(value):
+    """Recognize native parent references, including nested subagent sources.
+
+    Matches can only retain threads. They never establish that unrecognized
+    layouts have no dependencies.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return set()
+    if not isinstance(value, dict):
+        return set()
+    parents = set()
+    for key, item in value.items():
+        if key in ("forked_from_id", "forked_from_thread_id", "parent_thread_id"):
+            if isinstance(item, str) and item:
+                parents.add(item)
+        elif isinstance(item, dict) or (key == "source" and isinstance(item, str)):
+            parents.update(_retention_parent_ids(item))
+    return parents
+
+
 def _retention_rollout(path):
     """Read activity without retaining prompt/output text or trusting filenames."""
-    import json
-
     latest = None
     fork_ids = set()
     errors = []
@@ -79,9 +101,7 @@ def _retention_rollout(path):
                 if event.get("type") == "session_meta":
                     payload = event.get("payload")
                     if isinstance(payload, dict):
-                        for key in ("forked_from_id", "forked_from_thread_id", "parent_thread_id"):
-                            if isinstance(payload.get(key), str) and payload[key]:
-                                fork_ids.add(payload[key])
+                        fork_ids.update(_retention_parent_ids(payload))
         after = path.stat()
         if (before.st_size, before.st_mtime_ns, before.st_ino) != (
             after.st_size, after.st_mtime_ns, after.st_ino
@@ -132,20 +152,29 @@ def _retention_codex_rows(database):
         columns = {row[1] for row in connection.execute("PRAGMA table_info(threads)")}
         if not required.issubset(columns):
             raise ValueError("unsupported_codex_thread_schema")
-        rows = connection.execute(
-            "SELECT id, rollout_path, updated_at, recency_at, is_pinned FROM threads"
+        source_column = ", source" if "source" in columns else ", NULL"
+        source_rows = connection.execute(
+            "SELECT id, rollout_path, updated_at, recency_at, is_pinned"
+            + source_column + " FROM threads"
         ).fetchall()
+        rows = [row[:5] for row in source_rows]
+        source_endpoints = set()
+        for row in source_rows:
+            parents = _retention_parent_ids(row[5])
+            if parents:
+                source_endpoints.add(row[0])
+                source_endpoints.update(parents)
         tables = {
             row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         if "thread_spawn_edges" not in tables:
-            return rows, set(), ["fork_dependency_inventory_unknown"]
+            return rows, source_endpoints, ["fork_dependency_inventory_unknown"]
         edge_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(thread_spawn_edges)")
         }
         if not {"parent_thread_id", "child_thread_id"}.issubset(edge_columns):
-            return rows, set(), ["fork_dependency_inventory_unknown"]
-        endpoints = set()
+            return rows, source_endpoints, ["fork_dependency_inventory_unknown"]
+        endpoints = source_endpoints
         for parent, child in connection.execute(
             "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges"
         ):
@@ -155,7 +184,7 @@ def _retention_codex_rows(database):
         connection.close()
 
 
-def retention_plan(home: Path, inventory: dict, days=30) -> dict:
+def retention_plan(home: Path, inventory: dict, days=90) -> dict:
     """Produce reviewable age candidates with explicit protection/apply blockers.
 
     ``inventory['sources']`` contains app/path/sqlite records from discovery.
@@ -252,6 +281,8 @@ def retention_plan(home: Path, inventory: dict, days=30) -> dict:
                 "running_state_unknown", "cross_home_fork_references_unknown",
                 "native_automation_links_unknown", "verified_archive_required",
                 "supported_guarded_native_delete_unavailable",
+                "spawned_descendant_preflight_required",
+                "usefulness_review_required",
             ]))
             entries.append(entry)
         coverage.append({"app": "codex", "source": str(database), "status": "partial_read_only", "threads": len(records), "activity": "max(state updated_at, state recency_at, all rollout event timestamps, file mtime)"})
@@ -265,7 +296,7 @@ def retention_plan(home: Path, inventory: dict, days=30) -> dict:
     return {
         "schema_version": 1, "mode": "dry_run", "days": days,
         "planned_at": _retention_iso(now), "cutoff_epoch": cutoff,
-        "policy": "Retain sessions with any activity in the window; protect running, pinned, automation-linked and fork-dependent sessions; unknown protection blocks deletion.",
+        "policy": "Retain sessions with any activity in the window; protect running, pinned, automation-linked and fork-dependent sessions; age alone does not establish usefulness or approval; unknown protection blocks deletion.",
         "native_apply_supported": False, "deletion_count": 0,
         "counts": counts, "entries": entries, "coverage": coverage,
         "candidate_bytes": sum(entry.get("bytes", 0) for entry in entries if entry["status"] == "candidate_blocked"),
@@ -273,6 +304,7 @@ def retention_plan(home: Path, inventory: dict, days=30) -> dict:
             "Verify a restorable archive and exact source hashes for every affected native record/file.",
             "Obtain fresh authoritative running, pin, automation and cross-home fork protection state.",
             "Establish a release-supported native delete interface with atomic writer/reference guards and full affected-member preflight.",
+            "Review usefulness separately: retain older decisions and regular-work context even when archived.",
             "Obtain explicit user approval for the concrete completed deletion plan; archive/hide/unsubscribe is not deletion.",
         ],
     }
