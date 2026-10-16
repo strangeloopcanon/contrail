@@ -195,6 +195,8 @@ class CompactSnapshotTests(unittest.TestCase):
     def fixture(self, directory, sanitizer):
         path = Path(directory).resolve() / "snapshot.sqlite"
         with contextlib.closing(sqlite3.connect(path)) as db:
+            # Preserve deleted canary bytes regardless of SQLite's build default.
+            db.execute("PRAGMA secure_delete=OFF")
             if sanitizer == sanitize_desktop_snapshot:
                 db.execute("CREATE TABLE ItemTable(key TEXT,value TEXT)")
                 db.execute("INSERT INTO ItemTable VALUES('composer.composerData','history')")
