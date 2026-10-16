@@ -20,7 +20,7 @@ import uuid
 # The Rust binary concatenates adapters before this module. Direct source
 # execution remains useful for tests and connector orchestration from a checkout.
 if 'discover' not in globals():
-    from native_sources import discover, sanitize_desktop_snapshot, sanitize_codex_snapshot
+    from native_sources import discover, sanitize_desktop_snapshot, sanitize_codex_snapshot, sanitize_antigravity_snapshot
     from native_retention import retention_plan
 
 PART_LIMIT = 80 * 1024 * 1024
@@ -52,13 +52,14 @@ def digest_file(path, algorithm='sha256'):
     return digest.hexdigest()
 
 
-def write_json(path, data):
+def write_json(path, data, compact=False):
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     created = False
     try:
         with open(temporary, 'x', encoding='utf-8') as stream:
             created = True
-            json.dump(data, stream, indent=2, sort_keys=True)
+            json.dump(data, stream, indent=None if compact else 2,
+                      separators=(',', ':') if compact else None, sort_keys=True)
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())
@@ -121,11 +122,12 @@ def sqlite_reader(path, destination, max_bytes):
 def snapshot_file(source, destination, max_bytes, deadline_seconds=60):
     path = regular_path(source['path'])
     observed_stat = path.stat()
-    # In-place VACUUM may need two additional database-sized temporary files.
-    if source['sqlite'] and source['app'] in ('cursor-desktop', 'codex'):
-        max_bytes //= 3
-    elif source['sqlite']:
-        max_bytes //= 2  # Closed-store fallback holds a copy plus its backup.
+    # Closed-store fallback holds a private copy plus its backup, then removes
+    # the copy before projection. VACUUM INTO holds the snapshot plus its output;
+    # disposable projection copies do not allocate deletion rollback journals.
+    # The backup's separate 256 MiB headroom covers journal/header overhead.
+    if source['sqlite']:
+        max_bytes //= 2
     if path.stat().st_size > max_bytes:
         raise ValueError('source exceeds single snapshot scratch limit')
     started = utc()
@@ -176,11 +178,15 @@ def snapshot_file(source, destination, max_bytes, deadline_seconds=60):
                 if sidecar.stat().st_nlink != 1:
                     raise ValueError('linked offline snapshot sidecar is unsupported')
                 sidecar.unlink()
+        if destination.stat().st_size > max_bytes:
+            raise ValueError('SQLite snapshot exceeds scratch limit')
         projection = None
         if source['app'] == 'cursor-desktop':
-            projection = sanitize_desktop_snapshot(destination)
+            projection = sanitize_desktop_snapshot(destination, max_bytes=max_bytes)
         elif source['app'] == 'codex':
-            projection = sanitize_codex_snapshot(destination)
+            projection = sanitize_codex_snapshot(destination, max_bytes=max_bytes)
+        elif source['app'] == 'antigravity':
+            projection = sanitize_antigravity_snapshot(destination, max_bytes=max_bytes)
         if destination.stat().st_size > max_bytes:
             raise ValueError('SQLite snapshot exceeds scratch limit')
         boundary = ('Stable closed-store copy; live sidecars absent before and after; private SQLite backup'
@@ -490,7 +496,7 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
     destination = cloud_destination(cloud_parent_id, cloud_owner)
     home, output = Path(home).absolute(), Path(output).absolute()
     # Do not allow a backup destination within a live app store.
-    for live in (home / '.codex', home / '.cursor', home / '.claude', home / 'Library/Application Support/Cursor'):
+    for live in (home / '.codex', home / '.cursor', home / '.claude', home / '.gemini/antigravity', home / 'Library/Application Support/Cursor'):
         if output == live or live in output.parents:
             raise ValueError('output must be outside live app stores')
     for ancestor in [output, *output.parents]:
@@ -570,7 +576,7 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
         manifest['catalog'] = sorted(catalog.values(), key=lambda r: r['name'])
         if prior:
             manifest['base'] = {'run_id': prior['run_id'], 'manifest_sha256': digest_file(Path(base_run) / 'manifest.json')}
-        write_json(run / 'manifest.json', manifest)
+        write_json(run / 'manifest.json', manifest, compact=True)
         (run / 'RESTORE.md').write_text(
             '# Native history recovery\n\nFor full recovery, download every referenced base run and this run into sibling folders named by run ID, with each run’s numbered parts and manifest.json together. '
             'Run `contrail history verify --run FOLDER`, then '
@@ -666,9 +672,10 @@ def handoff(run, include_base=True, cloud_parent_id=None, cloud_owner=None):
     destination = cloud_destination(cloud_parent_id, cloud_owner, existing)
     if not destination:
         raise ValueError('configure --cloud-parent-id and --cloud-owner for cloud handoff')
-    verify(run, include_base=False)
+    verification = verify(run, include_base=False)
     if include_base:
         check_cloud_parents(run, require_remote=False)
+    write_json(run / 'verification.json', verification)
     names = [p['name'] for p in manifest['parts']] + ['manifest.json', 'RESTORE.md', 'verification.json']
     files = [{'name': name, 'path': str(run / name), 'bytes': regular_path(run / name).stat().st_size,
               'sha256': digest_file(run / name), 'md5': digest_file(run / name, 'md5')} for name in names]
@@ -852,7 +859,7 @@ def main():
             command.add_argument('--part-mib', type=int, default=80)
             command.add_argument('--cloud-parent-id', help='private Drive parent folder ID; defaults to CONTRAIL_HISTORY_CLOUD_PARENT')
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to CONTRAIL_HISTORY_CLOUD_OWNER')
-            command.add_argument('--app', action='append', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code'), help='explicit partial app scope; omit for all installed apps')
+            command.add_argument('--app', action='append', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code', 'antigravity'), help='explicit partial app scope; omit for all installed apps')
     for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'release-local'):
         command = commands.add_parser(name)
         command.add_argument('--run', type=Path, required=True)
@@ -865,7 +872,7 @@ def main():
             command.add_argument('--member', action='append', required=True,
                                  help='exact catalog name; repeat to plan selected files without downloading')
         if name == 'catalog':
-            command.add_argument('--app', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code'))
+            command.add_argument('--app', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code', 'antigravity'))
             command.add_argument('--contains', help='case-sensitive substring of home-relative file name')
             command.add_argument('--limit', type=int, default=100)
             command.add_argument('--offset', type=int, default=0)
@@ -883,7 +890,7 @@ def main():
         result = discover(args.home)
         result['source_bytes'] = sum(Path(s['path']).stat().st_size for s in result['sources'])
         result['source_count'] = len(result['sources'])
-        result['app_counts'] = {app: sum(s['app'] == app for s in result['sources']) for app in ('codex', 'cursor-cli', 'cursor-desktop', 'claude-code')}
+        result['app_counts'] = {app: sum(s['app'] == app for s in result['sources']) for app in ('codex', 'cursor-cli', 'cursor-desktop', 'claude-code', 'antigravity')}
         if args.command == 'dry-run' or args.summary:
             result.pop('sources')
     elif args.command == 'backup':

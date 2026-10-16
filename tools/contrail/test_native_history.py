@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import native_history as history
+import native_sources
 
 
 class NativeHistoryTests(unittest.TestCase):
@@ -301,6 +302,60 @@ class NativeHistoryTests(unittest.TestCase):
         self.assertEqual(destination.read_bytes(), b"stable replacement")
         self.assertEqual(len(calls), 6)
 
+    def test_projected_sqlite_accepts_two_copy_budget_and_rejects_one_byte_less(self):
+        for app in ("codex", "cursor-desktop"):
+            with self.subTest(app=app):
+                source = self.source(app + ".sqlite", sqlite=True)
+                source["app"] = app
+                path = Path(source["path"])
+                with contextlib.closing(sqlite3.connect(path)) as db:
+                    if app == "codex":
+                        db.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,title TEXT)")
+                        db.execute("INSERT INTO threads VALUES('session','history.jsonl','history')")
+                    else:
+                        db.execute("CREATE TABLE ItemTable(key TEXT,value TEXT)")
+                        db.execute("INSERT INTO ItemTable VALUES('composer.composerData','history')")
+                    db.commit()
+                size = path.stat().st_size
+                destination = self.root / (app + "-snapshot.sqlite")
+                before = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "source exceeds single snapshot scratch limit"):
+                    history.snapshot_file(source, destination, 2 * size - 1)
+                self.assertFalse(destination.exists())
+                result = history.snapshot_file(source, destination, 2 * size)
+                self.assertEqual(result["history_projection"]["quick_check"], "ok")
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_projected_open_wal_respects_committed_page_budget(self):
+        for app in ("codex", "cursor-desktop"):
+            with self.subTest(app=app):
+                source = self.source(app + "-wal.sqlite", sqlite=True)
+                source["app"] = app
+                path = Path(source["path"])
+                with contextlib.closing(sqlite3.connect(path)) as db:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    payload = "committed history " * 1000
+                    if app == "codex":
+                        db.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,title TEXT)")
+                        db.execute("INSERT INTO threads VALUES('session','history.jsonl',?)", (payload,))
+                        query = "SELECT title FROM threads"
+                    else:
+                        db.execute("CREATE TABLE ItemTable(key TEXT,value TEXT)")
+                        db.execute("INSERT INTO ItemTable VALUES('composer.composerData',?)", (payload,))
+                        query = "SELECT value FROM ItemTable"
+                    db.commit()
+                    size = db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0]
+                    self.assertGreater(size, path.stat().st_size)
+                    before = path.read_bytes()
+                    destination = self.root / (app + "-wal-snapshot.sqlite")
+                    with self.assertRaisesRegex(ValueError, "SQLite snapshot exceeds scratch limit"):
+                        history.snapshot_file(source, destination, 2 * size - 1)
+                    self.assertFalse(destination.exists())
+                    history.snapshot_file(source, destination, 2 * size)
+                    with contextlib.closing(sqlite3.connect(destination)) as compact:
+                        self.assertEqual(compact.execute(query).fetchone(), (payload,))
+                    self.assertEqual(path.read_bytes(), before)
+
     def test_changing_source_exhausts_three_attempts_and_cleans_run(self):
         source = self.source("session.jsonl", b"old")
         original = history.fingerprint
@@ -322,6 +377,56 @@ class NativeHistoryTests(unittest.TestCase):
                 self.backup([source])
         self.assertEqual(list(self.output.iterdir()), [])
         self.assertEqual(history.verify(self.backup([source]))["files"], 1)
+
+    def test_interrupted_offline_projection_discards_parts_and_preserves_live_store(self):
+        for app in ("codex", "cursor-desktop"):
+            with self.subTest(app=app):
+                source = self.source("z-" + app + ".sqlite", sqlite=True)
+                source["app"] = app
+                path = Path(source["path"])
+                with contextlib.closing(sqlite3.connect(path)) as db:
+                    if app == "codex":
+                        db.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,title TEXT)")
+                    else:
+                        db.execute("CREATE TABLE ItemTable(key TEXT,value TEXT)")
+                    db.execute("CREATE TABLE credentials(secret TEXT)")
+                    db.execute("INSERT INTO credentials VALUES(?)", ("credential" * 5000,))
+                    db.commit()
+                before = path.read_bytes()
+                real_connect = sqlite3.connect
+                interrupted = []
+                test = self
+
+                class InterruptedProjection:
+                    def __init__(self, db):
+                        self.db = db
+
+                    def execute(self, statement, *args):
+                        result = self.db.execute(statement, *args)
+                        if statement.startswith('DROP TABLE "credentials"'):
+                            test.assertEqual(self.db.execute("PRAGMA journal_mode").fetchone(), ("off",))
+                            interrupted.append(True)
+                            raise KeyboardInterrupt("fixture interrupted offline projection")
+                        return result
+
+                    def close(self):
+                        self.db.close()
+
+                def connect(database, *args, **kwargs):
+                    db = real_connect(database, *args, **kwargs)
+                    if "?mode=rw" in str(database):
+                        return InterruptedProjection(db)
+                    return db
+
+                earlier = self.source("a-history.jsonl", b"preserved transcript")
+                with mock.patch.object(history.sqlite3, "connect", side_effect=connect):
+                    with self.assertRaisesRegex(KeyboardInterrupt, "offline projection"):
+                        self.backup([earlier, source])
+                self.assertEqual(interrupted, [True])
+                self.assertEqual(list(self.output.iterdir()), [])
+                self.assertEqual(path.read_bytes(), before)
+                for suffix in ("-wal", "-shm", "-journal"):
+                    self.assertFalse(Path(str(path) + suffix).exists())
 
     def test_budget_failures_leave_sources_intact_and_no_partial_run(self):
         source = self.source("session.jsonl", bytes(range(256)))
@@ -348,7 +453,11 @@ class NativeHistoryTests(unittest.TestCase):
         self.assertNotEqual(run, next_run)
         self.assertEqual({part.name: part.read_bytes() for part in self.parts(run)}, before)
         self.assertEqual(history.verify(run)["files"], 1)
-        self.assertEqual(history.handoff(run), history.handoff(run))
+        first = history.handoff(run)
+        second = history.handoff(run)
+        self.assertEqual([f['name'] for f in first['files']], [f['name'] for f in second['files']])
+        verification = next(f for f in second['files'] if f['name'] == 'verification.json')
+        self.assertEqual(verification['sha256'], history.digest_file(run / 'verification.json'))
         self.assertEqual(len([path for path in self.output.iterdir() if path.is_dir()]), 2)
 
     def test_cloud_receipt_mismatches_cannot_release_parts(self):
@@ -686,6 +795,89 @@ class NativeHistoryTests(unittest.TestCase):
         self.assertTrue((run / "cloud-receipt.json").exists())
         self.assertEqual(Path(source["path"]).read_bytes(), b"fixture")
         self.assertEqual(history.release_local(run), result)
+
+
+class AntigravityHistoryTests(unittest.TestCase):
+    setUp = NativeHistoryTests.setUp
+    source = NativeHistoryTests.source
+    backup = NativeHistoryTests.backup
+    manifest = NativeHistoryTests.manifest
+
+    def test_antigravity_incremental_from_legacy_all_apps_and_recovery(self):
+        codex = self.source(".codex/sessions/session.jsonl", b"old-history")
+        codex['app'] = 'codex'
+        legacy = {'sources': [codex], 'versions': {'codex': None},
+                  'unsupported': [], 'exclusions': [], 'scope': 'all installed default-profile apps'}
+        base = Path(history.backup(self.home, self.output, inventory=legacy,
+                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        identity = '12345678-1234-1234-1234-123456789012'
+        conversation = self.source('.gemini/antigravity/conversations/' + identity + '.pb', b'native-protobuf')
+        conversation['app'] = 'antigravity'
+        inventory = history.discover(self.home)
+        inventory['scope'] = 'all installed default-profile apps'
+        run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
+                   scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        manifest = self.manifest(run)
+        self.assertEqual(manifest['comparison']['new_files'], 1)
+        self.assertEqual(manifest['comparison']['unchanged_files'], 1)
+        self.assertEqual(manifest['base']['run_id'], base.name)
+        self.assertEqual({r['app'] for r in manifest['catalog']}, {'codex', 'antigravity'})
+        self.assertEqual(history.list_catalog(run, app='antigravity')['matched_files'], 1)
+        self.assertNotIn('\n ', (run / 'manifest.json').read_text())
+        target = self.root / 'restored'
+        history.extract(run, target)
+        self.assertEqual((target / conversation['relative']).read_bytes(), b'native-protobuf')
+        self.assertEqual((target / codex['relative']).read_bytes(), b'old-history')
+
+    def test_handoff_persists_fresh_verification_and_binds_it(self):
+        run = self.backup([self.source('session.jsonl')])
+        stale = json.loads((run / 'verification.json').read_text())
+        stale['verified_utc'] = 'stale-fixture'
+        history.write_json(run / 'verification.json', stale)
+        handoff = history.handoff(run)
+        fresh = json.loads((run / 'verification.json').read_text())
+        self.assertNotEqual(fresh['verified_utc'], 'stale-fixture')
+        self.assertEqual(fresh['manifest_sha256'], history.digest_file(run / 'manifest.json'))
+        entry = next(f for f in handoff['files'] if f['name'] == 'verification.json')
+        self.assertEqual(entry['sha256'], history.digest_file(run / 'verification.json'))
+
+    def test_antigravity_live_wal_snapshot_projects_only_private_copy(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        source = self.source('.gemini/antigravity/conversations/' + identity + '.db', sqlite=True)
+        source['app'] = 'antigravity'
+        with contextlib.closing(sqlite3.connect(source['path'])) as live:
+            live.execute('PRAGMA journal_mode=WAL')
+            for name in ('trajectory_meta', 'steps'):
+                columns = native_sources._ANTIGRAVITY_COLUMNS[name].split()
+                live.execute('CREATE TABLE ' + name + ' (' + ','.join(c + ' BLOB' for c in columns) + ')')
+                live.execute('INSERT INTO ' + name + ' VALUES (' + ','.join('?' for _ in columns) + ')', tuple(b'history' for _ in columns))
+            live.execute('CREATE TABLE account_credentials(token TEXT)')
+            live.execute("INSERT INTO account_credentials VALUES ('private-profile-marker')")
+            live.commit()
+            run = self.backup([source])
+            self.assertEqual(live.execute('SELECT token FROM account_credentials').fetchone(), ('private-profile-marker',))
+            target = self.root / 'restored'
+            history.extract(run, target)
+            with contextlib.closing(sqlite3.connect(target / source['relative'])) as restored:
+                self.assertEqual(restored.execute('SELECT step_payload FROM steps').fetchone(), (b'history',))
+                self.assertFalse(restored.execute("SELECT 1 FROM sqlite_master WHERE name='account_credentials'").fetchall())
+
+    def test_antigravity_cli_scope_inventory_catalog_and_output_guard(self):
+        import sys
+        identity = '12345678-1234-1234-1234-123456789012'
+        self.source('.gemini/antigravity/conversations/' + identity + '.pb', b'fixture')
+        with mock.patch.object(sys, 'argv', ['history', 'inventory', '--home', str(self.home)]), contextlib.redirect_stdout(io.StringIO()) as output:
+            history.main()
+        self.assertEqual(json.loads(output.getvalue())['app_counts']['antigravity'], 1)
+        with mock.patch.object(sys, 'argv', ['history', 'backup', '--home', str(self.home), '--output', str(self.output), '--app', 'antigravity', '--scratch-mib', '1', '--output-mib', '2']), contextlib.redirect_stdout(io.StringIO()) as output:
+            history.main()
+        run = Path(json.loads(output.getvalue())['run'])
+        self.assertEqual(self.manifest(run)['inventory']['scope'], ['antigravity'])
+        with mock.patch.object(sys, 'argv', ['history', 'catalog', '--run', str(run), '--app', 'antigravity']), contextlib.redirect_stdout(io.StringIO()) as output:
+            history.main()
+        self.assertEqual(json.loads(output.getvalue())['matched_files'], 1)
+        with self.assertRaisesRegex(ValueError, 'outside live app stores'):
+            history.backup(self.home, self.home / '.gemini/antigravity/backup')
 
 
 if __name__ == "__main__":
