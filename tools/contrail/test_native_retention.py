@@ -18,7 +18,7 @@ _SPEC.loader.exec_module(retention)
 
 class NativeRetentionTests(unittest.TestCase):
     NOW = 1_790_560_000
-    OLD = NOW - 60 * 86400
+    OLD = NOW - 120 * 86400
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory()
@@ -53,7 +53,7 @@ class NativeRetentionTests(unittest.TestCase):
             ))
         return path
 
-    def plan(self, days=30):
+    def plan(self, days=90):
         with patch.object(retention.time, "time", return_value=self.NOW):
             return retention.retention_plan(self.home, self.inventory, days)
 
@@ -99,7 +99,43 @@ class NativeRetentionTests(unittest.TestCase):
 
     def test_exact_cutoff_is_retained(self):
         self.add_thread(event=self.NOW - 30 * 86400)
-        self.assertEqual(self.plan()["entries"][0]["status"], "retained_recent")
+        self.assertEqual(self.plan(days=30)["entries"][0]["status"], "retained_recent")
+
+    def test_default_keeps_threads_from_prior_weeks(self):
+        path = self.add_thread(updated=self.NOW - 45 * 86400,
+                               recency=self.NOW - 45 * 86400,
+                               event=self.NOW - 45 * 86400)
+        os.utime(path, (self.NOW - 45 * 86400,) * 2)
+        with patch.object(retention.time, "time", return_value=self.NOW):
+            result = retention.retention_plan(self.home, self.inventory)
+        self.assertEqual(result["days"], 90)
+        self.assertEqual(result["entries"][0]["status"], "retained_recent")
+
+    def test_nested_subagent_rollout_source_protects_both_endpoints(self):
+        self.add_thread("parent")
+        path = self.add_thread("child")
+        event = json.loads(path.read_text())
+        event["payload"]["source"] = {"subagent": {"thread_spawn": {
+            "parent_thread_id": "parent"}}}
+        path.write_text(json.dumps(event) + "\n")
+        os.utime(path, (self.OLD, self.OLD))
+        entries = self.plan()["entries"]
+        self.assertTrue(all("fork_dependency" in x["reasons"] for x in entries))
+
+    def test_native_source_metadata_protects_both_endpoints_without_edge(self):
+        self.add_thread("parent")
+        self.add_thread("child")
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("ALTER TABLE threads ADD COLUMN source TEXT")
+            connection.execute("UPDATE threads SET source=? WHERE id='child'", (
+                json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": "parent"}}}),))
+        entries = self.plan()["entries"]
+        self.assertTrue(all("fork_dependency" in x["reasons"] for x in entries))
+
+    def test_spawned_descendant_preflight_is_required_even_for_old_thread(self):
+        self.add_thread()
+        self.assertIn("spawned_descendant_preflight_required",
+                      self.plan()["entries"][0]["blockers"])
 
     def test_pins_and_both_fork_endpoints_are_protected(self):
         self.add_thread("pin", pinned=1)

@@ -5,7 +5,10 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -70,6 +73,134 @@ class NativeHistoryTests(unittest.TestCase):
         for item in receipt["files"]:
             item.pop("sha256")
         return receipt
+
+    def readback_downloads(self, run):
+        directory = self.root / 'downloaded'
+        directory.mkdir(mode=0o700)
+        for item in json.loads((run / 'cloud-handoff.json').read_text())['files']:
+            shutil.copyfile(run / item['name'], directory / item['name'])
+        return directory
+
+    def test_readback_verifies_released_payload_and_preserves_original_evidence(self):
+        source = self.source('session.jsonl', b'original native fixture')
+        database = self.source('history.sqlite', sqlite=True)
+        with contextlib.closing(sqlite3.connect(database['path'])) as db:
+            db.execute('CREATE TABLE messages (body TEXT)')
+            db.execute("INSERT INTO messages VALUES ('fixture')")
+            db.commit()
+        run = self.backup([source, database], part_bytes=64)
+        self.record(run, self.size_only_receipt(run))
+        downloaded = self.readback_downloads(run)
+        history.release_local(run, accept_size_only=True)
+        retained = {path.name: path.read_bytes() for path in run.iterdir()}
+        native = {Path(item['path']): Path(item['path']).read_bytes() for item in (source, database)}
+        result = history.verify_readback(run, downloaded)
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual(result['archive_verification']['files'], 2)
+        self.assertEqual(result['archive_verification']['sqlite_integrity'], 'ok')
+        self.assertEqual(result['manifest_sha256'], history.digest_file(run / 'manifest.json'))
+        self.assertEqual(result['bindings']['cloud-receipt.json'], history.digest_file(run / 'cloud-receipt.json'))
+        self.assertEqual({item['name'] for item in result['files']},
+                         {path.name for path in downloaded.iterdir()})
+        self.assertIn('not authenticated network origin', result['authority'])
+        self.assertEqual(json.loads((run / 'cloud-receipt.json').read_text())['verification_level'], 'size-only')
+        self.assertEqual(json.loads((run / 'cloud-readback.json').read_text()), result)
+        self.assertEqual({name: (run / name).read_bytes() for name in retained}, retained)
+        self.assertEqual({path: path.read_bytes() for path in native}, native)
+        self.assertTrue(all(not part.exists() for part in self.parts(run)))
+
+    def test_readback_rejects_corrupt_or_missing_downloads_and_substituted_manifest(self):
+        for failure in ('corrupt_part', 'missing_part', 'manifest', 'restore', 'verification'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                run = self.backup([self.source('session.jsonl')])
+                self.record(run, self.size_only_receipt(run))
+                directory = Path(temporary)
+                for item in json.loads((run / 'cloud-handoff.json').read_text())['files']:
+                    shutil.copyfile(run / item['name'], directory / item['name'])
+                part = directory / self.manifest(run)['parts'][0]['name']
+                if failure == 'missing_part':
+                    part.unlink()
+                elif failure == 'corrupt_part':
+                    part.write_bytes(b'x' * part.stat().st_size)
+                else:
+                    name = {'manifest': 'manifest.json', 'restore': 'RESTORE.md',
+                            'verification': 'verification.json'}[failure]
+                    target = directory / name
+                    target.write_bytes(b'x' * target.stat().st_size)
+                with self.assertRaises((ValueError, OSError)):
+                    history.verify_readback(run, directory)
+                self.assertFalse((run / 'cloud-readback.json').exists())
+
+    def test_readback_runs_archive_checks_after_file_correspondence(self):
+        for failure in ('member_hash', 'sqlite', 'full_archive'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                run = self.backup([self.source('session.jsonl')])
+                manifest = self.manifest(run)
+                if failure == 'member_hash':
+                    manifest['files'][0]['sha256'] = '0' * 64
+                elif failure == 'sqlite':
+                    manifest['files'][0]['sqlite'] = True
+                else:
+                    manifest['archive_sha256'] = '0' * 64
+                history.write_json(run / 'manifest.json', manifest)
+                # All outer metadata agrees. A previously issued receipt must
+                # never substitute for checking the actual supplied archive.
+                verification = json.loads((run / 'verification.json').read_text())
+                verification.update(manifest_sha256=history.digest_file(run / 'manifest.json'),
+                                    archive_sha256=manifest['archive_sha256'])
+                history.write_json(run / 'verification.json', verification)
+                handoff = json.loads((run / 'cloud-handoff.json').read_text())
+                for item in handoff['files']:
+                    path = run / item['name']
+                    item.update(bytes=path.stat().st_size, sha256=history.digest_file(path),
+                                md5=history.digest_file(path, 'md5'))
+                history.write_json(run / 'cloud-handoff.json', handoff)
+                self.record(run, self.size_only_receipt(run))
+                downloaded = Path(temporary)
+                for item in handoff['files']:
+                    shutil.copyfile(run / item['name'], downloaded / item['name'])
+                with self.assertRaises((ValueError, sqlite3.Error)):
+                    history.verify_readback(run, downloaded)
+                self.assertFalse((run / 'cloud-readback.json').exists())
+
+    def test_readback_rejects_unsafe_directories_and_symlinked_files(self):
+        run = self.backup([self.source('session.jsonl')])
+        self.record(run, self.size_only_receipt(run))
+        downloaded = self.readback_downloads(run)
+        linked = self.root / 'linked-download'
+        linked.symlink_to(downloaded, target_is_directory=True)
+        nested = run / 'download'
+        nested.mkdir(mode=0o700)
+        for invalid in (run, nested, linked, self.root / 'missing', downloaded / 'manifest.json'):
+            with self.subTest(path=invalid), self.assertRaises((ValueError, OSError)):
+                history.verify_readback(run, invalid)
+        downloaded.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, 'private'):
+            history.verify_readback(run, downloaded)
+        downloaded.chmod(0o700)
+        target = downloaded / 'RESTORE.md'
+        target.unlink()
+        target.symlink_to(run / 'RESTORE.md')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            history.verify_readback(run, downloaded)
+        self.assertFalse((run / 'cloud-readback.json').exists())
+
+    def test_readback_cli_checkout_and_embedded_engine(self):
+        run = self.backup([self.source('session.jsonl')])
+        self.record(run, self.size_only_receipt(run))
+        downloaded = self.readback_downloads(run)
+        directory = Path(__file__).parent
+        engine = '\n'.join((directory / name).read_text() for name in (
+            'native_sources.py', 'native_retention.py', 'native_restore.py', 'native_history.py'))
+        for launcher in ([sys.executable, str(directory / 'native_history.py')],
+                         [sys.executable, '-c', engine]):
+            with self.subTest(launcher=launcher[:2]):
+                result = subprocess.run(launcher + ['verify-readback', '--run', str(run),
+                                        '--download-dir', str(downloaded)], cwd=self.root,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)['status'], 'verified')
+                self.assertEqual(json.loads(result.stdout)['downloads_performed'], 0)
 
     def archive_fixture(self, members, records=None, truncate=0):
         """Write internally checksummed hostile archives to exercise content checks."""

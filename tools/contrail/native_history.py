@@ -747,6 +747,66 @@ def record_cloud(run, receipt_path):
     return receipt
 
 
+def verify_readback(run, download_dir):
+    """Verify supplied provider downloads without upgrading upload evidence."""
+    run, download_dir = Path(run).absolute(), Path(download_dir).absolute()
+    for directory in (run, download_dir):
+        if any(path.is_symlink() for path in (directory, *directory.parents)):
+            raise ValueError('symlink source or destination is unsupported')
+        if not directory.is_dir():
+            raise ValueError('readback requires existing run and download directories')
+    if (run.resolve() == download_dir.resolve()
+            or run.resolve() in download_dir.resolve().parents
+            or download_dir.resolve() in run.resolve().parents):
+        raise ValueError('readback download directory must be separate from the original run')
+    if download_dir.stat().st_mode & 0o077:
+        raise ValueError('readback download directory must be private (mode 0700)')
+    manifest_path = regular_path(run / 'manifest.json')
+    manifest = json.loads(manifest_path.read_text())
+    remote_path = regular_path(run / 'cloud-receipt.json')
+    remote = validate_cloud(run, json.loads(remote_path.read_text()), allow_missing_parts=True)
+    check_local_verification(run, manifest)
+    handoff_path = regular_path(run / 'cloud-handoff.json')
+    handoff_data = json.loads(handoff_path.read_text())
+    bindings = {name: digest_file(regular_path(run / name)) for name in (
+        'manifest.json', 'verification.json', 'cloud-handoff.json', 'cloud-receipt.json')}
+    supplied_ids = [item['id'] for item in remote['files']]
+    if len(set(supplied_ids)) != len(supplied_ids):
+        raise ValueError('readback requires distinct remote file IDs')
+    remote_by_name = {item['name']: item for item in remote['files']}
+    files, before = [], {}
+    for expected in handoff_data['files']:
+        name = expected['name']
+        downloaded = regular_path(download_dir / name)
+        before[name] = fingerprint(downloaded)
+        actual_hash = digest_file(downloaded)
+        if downloaded.stat().st_size != expected['bytes'] or actual_hash != expected['sha256']:
+            raise ValueError('downloaded file size/SHA256 mismatch: ' + name)
+        files.append({'name': name, 'id': remote_by_name[name]['id'],
+                      'bytes': expected['bytes'], 'sha256': actual_hash})
+    if json.loads((download_dir / 'manifest.json').read_text()) != manifest:
+        raise ValueError('downloaded manifest does not match original run')
+    verification = verify_archive(download_dir)
+    if any(fingerprint(regular_path(download_dir / name)) != original for name, original in before.items()):
+        raise ValueError('downloaded files changed during readback verification')
+    if bindings != {name: digest_file(regular_path(run / name)) for name in bindings}:
+        raise ValueError('original readback evidence changed during verification')
+    result = {
+        'format': 'contrail-native-history-readback-v1', 'status': 'verified',
+        'run_id': manifest['run_id'], 'verified_utc': utc(), 'verification_level': 'sha256',
+        'manifest_sha256': bindings['manifest.json'], 'archive_sha256': manifest['archive_sha256'],
+        'bindings': bindings, 'parent_folder_id': remote['parent_folder_id'],
+        'folder_id': remote['folder_id'], 'owner': remote['owner'], 'private': remote['private'],
+        'files': files, 'archive_verification': verification,
+        'authority': 'connector/operator supplied download origins and remote IDs; '
+                     'Contrail verifies supplied local bytes, not authenticated network origin or current remote availability',
+        'scope': 'this run only; required base runs need separate readback receipts; native app import untested',
+        'downloads_performed': 0,
+    }
+    write_json(run / 'cloud-readback.json', result)
+    return result
+
+
 def release_local(run, accept_size_only=False):
     run = Path(run).absolute()
     policy = 'provider-upload-integrity' if accept_size_only else 'checksums-required'
@@ -851,6 +911,9 @@ def main():
         command.add_argument('--home', type=Path, default=Path.home())
         if name == 'inventory':
             command.add_argument('--summary', action='store_true')
+        if name == 'retention-plan':
+            command.add_argument('--days', type=int, default=90,
+                                 help='minimum inactivity in days before usefulness review; defaults to 90')
         if name == 'backup':
             command.add_argument('--output', type=Path, required=True)
             command.add_argument('--base-run', type=Path, help='prior verified sibling run; store only new or changed files')
@@ -860,7 +923,7 @@ def main():
             command.add_argument('--cloud-parent-id', help='private Drive parent folder ID; defaults to CONTRAIL_HISTORY_CLOUD_PARENT')
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to CONTRAIL_HISTORY_CLOUD_OWNER')
             command.add_argument('--app', action='append', choices=('codex', 'cursor-cli', 'cursor-desktop', 'claude-code', 'antigravity'), help='explicit partial app scope; omit for all installed apps')
-    for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'release-local'):
+    for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'verify-readback', 'release-local'):
         command = commands.add_parser(name)
         command.add_argument('--run', type=Path, required=True)
         if name == 'extract':
@@ -881,6 +944,9 @@ def main():
             command.add_argument('--cloud-owner', help='expected private Drive owner; defaults to recorded configuration or CONTRAIL_HISTORY_CLOUD_OWNER')
         if name == 'record-cloud':
             command.add_argument('--receipt', type=Path, required=True)
+        if name == 'verify-readback':
+            command.add_argument('--download-dir', type=Path, required=True,
+                                 help='private directory with every handoff file downloaded from its saved remote ID')
         if name == 'release-local':
             command.add_argument('--accept-size-only', action='store_true',
                                  help='explicitly trust provider upload integrity after private metadata and size confirmation')
@@ -903,7 +969,7 @@ def main():
                         scratch_bytes=args.scratch_mib * 1024**2, output_bytes=args.output_mib * 1024**2, base_run=args.base_run,
                         cloud_parent_id=args.cloud_parent_id, cloud_owner=args.cloud_owner)
     elif args.command == 'retention-plan':
-        result = retention_plan(args.home, discover(args.home))
+        result = retention_plan(args.home, discover(args.home), days=args.days)
     elif args.command == 'retention-apply':
         raise ValueError('native apply blocked: cannot prove running/pinned/automation/fork protection through supported interfaces; no histories deleted')
     elif args.command == 'verify':
@@ -924,6 +990,8 @@ def main():
         result = handoff(args.run, cloud_parent_id=args.cloud_parent_id, cloud_owner=args.cloud_owner)
     elif args.command == 'record-cloud':
         result = record_cloud(args.run, args.receipt)
+    elif args.command == 'verify-readback':
+        result = verify_readback(args.run, args.download_dir)
     else:
         result = release_local(args.run, accept_size_only=args.accept_size_only)
     print(json.dumps(result, indent=2, sort_keys=True))
