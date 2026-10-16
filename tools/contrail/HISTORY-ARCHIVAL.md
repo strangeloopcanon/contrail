@@ -1,8 +1,10 @@
 # Preserve coding history without keeping every backup on your laptop
 
-Contrail can preserve supported native histories from Codex, Cursor and Claude Code as immutable snapshots. Later runs store only new or changed files. Upload the snapshots to storage you control through an external authenticated connector workflow, then release generated local archive parts under your chosen verification policy. Small local catalogs and receipts support the next comparison and recovery planning.
+Contrail can preserve supported native histories from Codex, Cursor, Claude Code and Antigravity as immutable snapshots. Later runs store only new or changed files. Upload the snapshots to storage you control through an external authenticated connector workflow, then release generated local archive parts under your chosen verification policy. Small local catalogs and receipts support the next comparison and recovery planning.
 
 Catalog browsing, restore planning and selected extraction arrive in `contrail-cli` 0.1.7 and `contrails` 0.1.6. Older installed releases do not have these commands. The archive format is unchanged, and whole-chain `verify` and `extract` work as before.
+
+Antigravity native backups require CLI 0.1.8 or bundle 0.1.7. An ordinary all-app backup includes supported conversation files, conversation artifacts, annotations, recordings and summaries from the default profile. No separate Antigravity script is needed. Account/configuration files are excluded. The existing daemon capture of normalized Antigravity sessions is separate from these original-history archives.
 
 These snapshots are not the redacted Contrail capture log. They keep original transcripts and databases, which can contain pasted secrets, and Contrail does not encrypt them.
 

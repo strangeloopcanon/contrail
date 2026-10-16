@@ -8,13 +8,15 @@ from pathlib import Path
 import plistlib
 import re
 import stat
+import tempfile
 
 
 _EXCLUSIONS = [
     "Credentials, auth, settings, plugins, extensions, caches, logs, shell environments, and source workspaces are excluded.",
-    "SQLite WAL/SHM sidecars are excluded; databases use online backup. Codex and Cursor desktop snapshots are history projections with auth/settings namespaces removed, not byte-identical full profiles.",
+    "SQLite WAL/SHM sidecars are excluded; databases use online backup. Codex, Cursor desktop and Antigravity snapshots are history projections with auth/settings namespaces removed, not byte-identical full profiles.",
     "Cursor retrieval indexes, MCP state/auth, worker logs, terminals, and workspace trust markers are excluded.",
     "Codex generated worktrees, automations, memories, and application configuration are excluded.",
+    "Antigravity account/config, MCP, binaries, implicit context, code tracker and general app state are excluded; derived search indexes are omitted from history projections.",
 ]
 
 
@@ -70,7 +72,7 @@ def discover(home: Path):
         raise ValueError("home must be an existing directory")
     inventory = {"sources": [], "exclusions": list(_EXCLUSIONS), "unsupported": [],
                  "versions": {"codex": None, "cursor-cli": None, "cursor-desktop": None,
-                              "claude-code": None}}
+                              "claude-code": None, "antigravity": None}}
     exclusions = inventory["exclusions"]
     unsupported = inventory["unsupported"]
     seen = set()
@@ -185,9 +187,34 @@ def discover(home: Path):
         tree("claude-code", claude / dependency,
              lambda path, dep=dependency: dep == "file-history" or path.suffix == ".json")
 
+    # History directories are separate from account/config/runtime state.
+    antigravity = home / ".gemini/antigravity"
+    identity = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+    for path, info in _children(antigravity / "conversations", exclusions):
+        if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.(?:db|pb)", path.name):
+            add("antigravity", path, path.suffix == ".db")
+        elif not path.name.endswith(("-wal", "-shm")):
+            unsupported.append("unrecognized Antigravity conversation excluded: " + str(path))
+    for name in ("conversation_summaries.db", "agyhub_summaries_proto.pb"):
+        add("antigravity", antigravity / name, name.endswith(".db"))
+    # Arbitrary conversation-generated artifacts remain private and unredacted.
+    # Only native conversation-ID roots qualify; unrelated profile files do not.
+    for directory in ("brain", "browser_recordings"):
+        for path, info in _children(antigravity / directory, exclusions):
+            if stat.S_ISDIR(info.st_mode) and re.fullmatch(identity, path.name):
+                tree("antigravity", path, lambda item: item.name != ".DS_Store")
+            elif path.name != ".DS_Store":
+                unsupported.append("unrecognized Antigravity artifact excluded: " + str(path))
+    for path, info in _children(antigravity / "annotations", exclusions):
+        if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.pbtxt", path.name):
+            add("antigravity", path)
+        else:
+            unsupported.append("unrecognized Antigravity annotation excluded: " + str(path))
+
     # Reading bundle metadata avoids starting apps or executing an untrusted CLI.
     # CLI versions remain unknown; a history layout is not an app version.
-    for app, bundle in (("codex", "Codex.app"), ("cursor-desktop", "Cursor.app")):
+    for app, bundle in (("codex", "Codex.app"), ("cursor-desktop", "Cursor.app"),
+                        ("antigravity", "Antigravity.app")):
         for apps in (home / "Applications", Path("/Applications")):
             metadata = apps / bundle / "Contents/Info.plist"
             try:
@@ -228,7 +255,63 @@ _DESKTOP_HEADER_COLUMNS = {
 }
 
 
-def sanitize_desktop_snapshot(path: Path):
+def _offline_snapshot_path(path, max_bytes=None):
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("snapshot path must be absolute")
+    info = _checked(path)
+    if info is None or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("snapshot must be a regular, unlinked private copy")
+    if max_bytes is not None and info.st_size > max_bytes:
+        raise ValueError("SQLite snapshot exceeds scratch limit")
+    parent = path.parent.stat()
+    if parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) & 0o077:
+        raise ValueError("snapshot parent must be private")
+    for suffix in ("-wal", "-shm", "-journal"):
+        if _checked(Path(str(path) + suffix)) is not None:
+            raise ValueError("snapshot has active SQLite sidecar: " + suffix)
+    return path
+
+
+def _compact_snapshot(connection, path, max_bytes=None):
+    """Replace a committed private snapshot only after its compact copy passes."""
+    import sqlite3
+
+    _offline_snapshot_path(path, max_bytes)
+    limit = path.stat().st_size if max_bytes is None else max_bytes
+    if path.stat().st_size > limit:
+        raise ValueError("SQLite snapshot exceeds scratch limit")
+    descriptor, name = tempfile.mkstemp(prefix="compact-", suffix=".sqlite", dir=path.parent)
+    temporary = Path(name)
+    os.close(descriptor)
+    try:
+        # VACUUM INTO accepts an existing empty file, so retain mkstemp's
+        # exclusive creation and 0600 permissions throughout the rebuild.
+        connection.execute("VACUUM INTO ?", (str(temporary),))
+        info = _checked(temporary)
+        if (info is None or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError("compact snapshot must be a regular, unlinked private copy")
+        if info.st_size > limit:
+            raise ValueError("SQLite snapshot exceeds scratch limit")
+        checked = sqlite3.connect(temporary.as_uri() + "?mode=ro", uri=True)
+        try:
+            checks = checked.execute("PRAGMA quick_check").fetchall()
+            freelist = checked.execute("PRAGMA freelist_count").fetchone()[0]
+            if checks != [("ok",)] or freelist != 0:
+                raise ValueError("sanitized snapshot failed SQLite integrity check")
+        finally:
+            checked.close()
+        # The input database must be closed before its pathname is replaced.
+        connection.close()
+        os.replace(temporary, path)
+        return "ok", freelist
+    finally:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(temporary) + suffix).unlink(missing_ok=True)
+
+
+def sanitize_desktop_snapshot(path: Path, max_bytes=None):
     """Project a caller-owned OFFLINE SQLite snapshot onto known history rows.
 
     Never call this on native/live stores. This removes auth/settings namespaces
@@ -238,15 +321,7 @@ def sanitize_desktop_snapshot(path: Path):
     """
     import sqlite3
 
-    path = Path(path)
-    if not path.is_absolute():
-        raise ValueError("snapshot path must be absolute")
-    info = _checked(path)
-    if info is None or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-        raise ValueError("snapshot must be a regular, unlinked private copy")
-    for suffix in ("-wal", "-shm", "-journal"):
-        if _checked(Path(str(path) + suffix)) is not None:
-            raise ValueError("snapshot has active SQLite sidecar: " + suffix)
+    path = _offline_snapshot_path(path, max_bytes)
     report = {
         "scope": "Cursor native history projection; auth/settings and unknown schema excluded. History payloads are not content-redacted; automatic app resumption is unverified.",
         "tables": {}, "removed_schema": {},
@@ -257,11 +332,23 @@ def sanitize_desktop_snapshot(path: Path):
     try:
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("PRAGMA foreign_keys=OFF")
-        connection.execute("PRAGMA journal_mode=DELETE")
-        connection.execute("PRAGMA secure_delete=ON")
         schema = connection.execute(
             "SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
         ).fetchall()
+        for kind, name in schema:
+            if kind != "table":
+                continue
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(" + quote(name) + ")")}
+            if name in ("ItemTable", "cursorDiskKV") and columns != {"key", "value"}:
+                raise ValueError("unrecognized Cursor history schema: " + name)
+            if name == "composerHeaders" and (
+                    not {"composerId", "value"}.issubset(columns) or not columns.issubset(_DESKTOP_HEADER_COLUMNS)):
+                raise ValueError("unrecognized Cursor history schema: composerHeaders")
+        # Only disposable offline copies may omit the rollback journal. Failed
+        # projection can damage this copy; the backup must discard the run.
+        if connection.execute("PRAGMA journal_mode=OFF").fetchone()[0] != "off":
+            raise ValueError("offline SQLite runtime does not support journal_mode=OFF; use a compatible Python 3 runtime")
+        connection.execute("PRAGMA secure_delete=ON")
         connection.execute("BEGIN IMMEDIATE")
         # Prevent unknown triggers from executing while deleting rows. Explicit
         # indexes/views also carry SQL constants and unrelated profile structure.
@@ -276,10 +363,7 @@ def sanitize_desktop_snapshot(path: Path):
                 continue
             table = quote(name)
             before = connection.execute("SELECT count(*) FROM " + table).fetchone()[0]
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(" + table + ")")}
             if name in ("ItemTable", "cursorDiskKV"):
-                if columns != {"key", "value"}:
-                    raise ValueError("unrecognized Cursor history schema: " + name)
                 if name == "ItemTable":
                     clause = "key IN (" + ",".join("?" for _ in _DESKTOP_ITEM_KEYS) + ")"
                     params = _DESKTOP_ITEM_KEYS
@@ -289,22 +373,90 @@ def sanitize_desktop_snapshot(path: Path):
                 connection.execute("DELETE FROM " + table + " WHERE typeof(key)!='text' OR NOT (" + clause + ")", params)
                 kept = connection.execute("SELECT count(*) FROM " + table).fetchone()[0]
             elif name == "composerHeaders":
-                if not {"composerId", "value"}.issubset(columns) or not columns.issubset(_DESKTOP_HEADER_COLUMNS):
-                    raise ValueError("unrecognized Cursor history schema: composerHeaders")
                 kept = before
             else:
                 connection.execute("DROP TABLE " + table)
                 kept = 0
             report["tables"][name] = {"before": before, "kept": kept, "removed": before - kept}
         connection.commit()
-        # secure_delete scrubs deleted cells; VACUUM rebuilds pages and removes
-        # freelist/schema remnants from this disposable offline snapshot.
-        connection.execute("VACUUM")
-        check = connection.execute("PRAGMA quick_check").fetchone()[0]
-        if check != "ok":
-            raise ValueError("sanitized snapshot failed SQLite integrity check")
-        report["quick_check"] = check
-        report["freelist_pages"] = connection.execute("PRAGMA freelist_count").fetchone()[0]
+        # Finish projection before allocating the compact output. At most the
+        # private input and one database-sized copy coexist; no journal exists.
+        report["quick_check"], report["freelist_pages"] = _compact_snapshot(connection, path, max_bytes)
+    finally:
+        connection.close()
+    return report
+
+
+_ANTIGRAVITY_COLUMNS = {
+    "trajectory_meta": "trajectory_id cascade_id trajectory_type source",
+    "steps": "idx step_type status has_subtrajectory metadata error_details permissions task_details render_info step_payload step_format",
+    "gen_metadata": "idx data size",
+    "executor_metadata": "idx data",
+    "parent_references": "idx data",
+    "trajectory_metadata_blob": "id data",
+    "battle_mode_infos": "idx data",
+    "conversation_summaries": "conversation_id title preview step_count last_modified_time workspace_uris status source project_id agent_name parent_conversation_id nesting_depth battle_id winning_conversation_id not_fully_idle killed last_user_input_time last_user_input_step_index app_data_dir raw_summary group_id",
+    "search_schema_version": "version",
+}
+
+
+def sanitize_antigravity_snapshot(path: Path, max_bytes=None):
+    """Project an offline copy onto observed native history tables only.
+
+    Derived search indexes and account/config tables are excluded. Unknown
+    columns fail before mutation. Conversation content is not redacted.
+    """
+    import sqlite3
+
+    path = _offline_snapshot_path(path, max_bytes)
+    quote = lambda name: '"' + name.replace('"', '""') + '"'
+    report = {"scope": "Antigravity native history projection; account/config and derived search indexes excluded; native resumption unverified.",
+              "tables": {}, "excluded_tables": [], "removed_schema": {}}
+    connection = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True)
+    try:
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("PRAGMA foreign_keys=OFF")
+        schema = connection.execute("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").fetchall()
+        tables = {name for kind, name, _ in schema if kind == "table"}
+        if {"trajectory_meta", "steps"}.issubset(tables):
+            permitted = set(_ANTIGRAVITY_COLUMNS) - {"conversation_summaries", "search_schema_version"}
+            report["layout"] = "trajectory"
+        elif "conversation_summaries" in tables:
+            permitted = {"conversation_summaries", "search_schema_version"}
+            report["layout"] = "summaries"
+        else:
+            raise ValueError("unrecognized Antigravity history database layout")
+        for name in tables & permitted:
+            column_info = connection.execute("PRAGMA table_xinfo(" + quote(name) + ")").fetchall()
+            columns = {row[1] for row in column_info}
+            if (columns != set(_ANTIGRAVITY_COLUMNS[name].split())
+                    or any(row[6] != 0 for row in column_info)):
+                raise ValueError("unrecognized Antigravity history schema: " + name)
+            definition = next(sql for kind, table, sql in schema if kind == "table" and table == name)
+            if definition and "VIRTUAL TABLE" in definition.upper():
+                raise ValueError("unrecognized Antigravity virtual history table: " + name)
+        if connection.execute("PRAGMA journal_mode=OFF").fetchone()[0] != "off":
+            raise ValueError("offline SQLite runtime does not support journal_mode=OFF; use a compatible Python 3 runtime")
+        connection.execute("PRAGMA secure_delete=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        for kind, name, _ in schema:
+            if kind in ("trigger", "view", "index"):
+                connection.execute("DROP " + kind.upper() + " IF EXISTS " + quote(name))
+                report["removed_schema"][kind] = report["removed_schema"].get(kind, 0) + 1
+        # Virtual tables must be dropped before their shadow tables.
+        ordered = sorted((item for item in schema if item[0] == "table"),
+                         key=lambda item: not (item[2] and "VIRTUAL TABLE" in item[2].upper()))
+        for _, name, _ in ordered:
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is None:
+                continue
+            if name in permitted:
+                count = connection.execute("SELECT count(*) FROM " + quote(name)).fetchone()[0]
+                report["tables"][name] = {"kept": count}
+            else:
+                connection.execute("DROP TABLE " + quote(name))
+                report["excluded_tables"].append(name)
+        connection.commit()
+        report["quick_check"], report["freelist_pages"] = _compact_snapshot(connection, path, max_bytes)
     finally:
         connection.close()
     return report
@@ -326,11 +478,11 @@ _CODEX_TABLE_COLUMNS = {
     "thread_history_projection_state": "thread_id next_rollout_byte_offset next_rollout_ordinal",
     "thread_items": "thread_id turn_id item_id rollout_ordinal created_at_ms item_json item_type updated_at_ordinal started_at_ms completed_at_ms",
     "thread_realtime_items": "thread_id item_id rollout_ordinal created_at_ms item_type item_json",
-    "thread_turns": "thread_id turn_id rollout_ordinal status error_json started_at completed_at duration_ms first_user_item_id final_agent_item_id rollout_byte_offset rollout_end_ordinal rollout_end_byte_offset",
+    "thread_turns": "thread_id turn_id rollout_ordinal status error_json started_at completed_at duration_ms first_user_item_id final_agent_item_id rollout_byte_offset rollout_end_ordinal rollout_end_byte_offset root_turn_id",
 }
 
 
-def sanitize_codex_snapshot(path: Path):
+def sanitize_codex_snapshot(path: Path, max_bytes=None):
     """Remove non-history tables from a caller-owned closed Codex SQLite copy.
 
     This is a native history projection, not a profile backup or content DLP.
@@ -339,15 +491,7 @@ def sanitize_codex_snapshot(path: Path):
     """
     import sqlite3
 
-    path = Path(path)
-    if not path.is_absolute():
-        raise ValueError("snapshot path must be absolute")
-    info = _checked(path)
-    if info is None or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-        raise ValueError("snapshot must be a regular, unlinked private copy")
-    for suffix in ("-wal", "-shm", "-journal"):
-        if _checked(Path(str(path) + suffix)) is not None:
-            raise ValueError("snapshot has active SQLite sidecar: " + suffix)
+    path = _offline_snapshot_path(path, max_bytes)
     quote = lambda name: '"' + name.replace('"', '""') + '"'
     report = {
         "scope": "Codex native history projection; enrollment/config/auth and unknown schema excluded. History payloads are not content-redacted. Managed blobs/assets are not discovered; automatic native resumption is unverified.",
@@ -379,7 +523,10 @@ def sanitize_codex_snapshot(path: Path):
             required = {"id", "rollout_path"} if name == "threads" else {"parent_thread_id", "child_thread_id"} if name == "thread_spawn_edges" else {"thread_id"} if name.startswith("thread_") and name != "thread_sections" else set()
             if not columns or not columns.issubset(expected) or not required.issubset(columns):
                 raise ValueError("unrecognized Codex history schema: " + name)
-        connection.execute("PRAGMA journal_mode=DELETE")
+        # This is disposable scratch, never a live store. Projection failure
+        # may damage it without a journal; backup discards the incomplete run.
+        if connection.execute("PRAGMA journal_mode=OFF").fetchone()[0] != "off":
+            raise ValueError("offline SQLite runtime does not support journal_mode=OFF; use a compatible Python 3 runtime")
         connection.execute("PRAGMA secure_delete=ON")
         connection.execute("BEGIN IMMEDIATE")
         for kind, name in schema:
@@ -399,11 +546,7 @@ def sanitize_codex_snapshot(path: Path):
                 report["excluded_tables"].append(name)
             report["tables"][name] = {"before": before, "kept": kept, "removed": before - kept}
         connection.commit()
-        connection.execute("VACUUM")
-        report["quick_check"] = connection.execute("PRAGMA quick_check").fetchone()[0]
-        report["freelist_pages"] = connection.execute("PRAGMA freelist_count").fetchone()[0]
-        if report["quick_check"] != "ok" or report["freelist_pages"] != 0:
-            raise ValueError("sanitized Codex snapshot failed SQLite integrity check")
+        report["quick_check"], report["freelist_pages"] = _compact_snapshot(connection, path, max_bytes)
     finally:
         connection.close()
     return report

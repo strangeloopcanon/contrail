@@ -118,7 +118,7 @@ memex explain abc123    # which sessions produced this diff?
 
 ## Native history archives
 
-`contrail history` preserves supported native history from Codex, Cursor and Claude Code, including original transcripts and coherent history-only SQLite snapshots. It does not use the daemon or the redacted master log, and it never changes live app histories. Each run is a folder of numbered compressed parts, plus a manifest, hashes and a verification receipt. Catalog browsing, restore planning and selected extraction require `contrail-cli` 0.1.7 or `contrails` 0.1.6 or later.
+`contrail history` preserves supported native history from Codex, Cursor, Claude Code and Antigravity, including original transcripts and coherent history-only SQLite snapshots. It does not use the daemon or the redacted master log, and it never changes live app histories. Each run is a folder of numbered compressed parts, plus a manifest, hashes and a verification receipt. Catalog browsing, restore planning and selected extraction require `contrail-cli` 0.1.7 or `contrails` 0.1.6 or later. Antigravity native backup requires CLI 0.1.8 or bundle 0.1.7.
 
 ```bash
 # Full archive of all installed default-profile apps (output must be outside app profiles)
@@ -126,6 +126,9 @@ contrail history backup --output /path/to/snapshots
 
 # Incremental: store only files that are new or changed since a previous sibling run
 contrail history backup --output /path/to/snapshots --base-run /path/to/snapshots/PREVIOUS-RUN
+
+# Antigravity alone, when an explicitly partial backup is wanted
+contrail history backup --output /path/to/snapshots --app antigravity
 
 # Browse the latest retained files using local metadata only
 contrail history catalog --run /path/to/snapshots/LATEST-RUN --app claude-code --contains SESSION-ID
@@ -141,6 +144,12 @@ contrail history extract --run /path/to/snapshots/LATEST-RUN \
 ```
 
 **Cloud storage.** Contrail has no built-in cloud login. Each run can produce a `cloud-handoff.json` upload list for a private Google Drive folder. An external, authenticated connector workflow uploads the files and supplies evidence of the upload, which `contrail history record-cloud` validates. `contrail history release-local` then removes that run's generated local archive parts. By default, release requires remote checksums for every file. `--accept-size-only` is an explicit lower-assurance policy: it relies on the provider's upload integrity after size, parent folder and private permissions match, and records that choice. Manifests, receipts and catalog metadata stay local for the next incremental and for restore planning. Backup and upload also need temporary local scratch space and the current run's parts until release.
+
+**Antigravity coverage.** Default all-app backups include supported conversation protobufs and databases, conversation artifacts, annotations, browser recordings and summaries under `~/.gemini/antigravity`. Account state, credentials, configuration and runtime files are excluded. This native archive preserves files and history records; the daemon's existing normalized Antigravity capture is a separate feature. Native import/resume remains untested. Existing all-app backup chains can add Antigravity in the next incremental; keep their prior remote parents.
+
+**Backup space.** SQLite snapshots reserve twice the database size within `--scratch-mib`, including committed WAL pages. Codex and Cursor projections disable rollback journals only in disposable offline copies, compact into one private file, verify it, then replace the snapshot. A failed projection discards the incomplete run. Closed-store fallback copies are removed before compaction. A database larger than half the scratch budget fails before projection. Backup also requires free space for the full scratch and output budgets plus 256 MiB for metadata.
+
+The CLI runs `python3` from `PATH`. Its SQLite library must support `VACUUM INTO` and `journal_mode=OFF`. Some macOS system SQLite builds prohibit journal mode OFF; backup fails safely with those builds. Select a compatible Python runtime through `PATH`, such as Homebrew Python 3.14 on macOS.
 
 **Limits.**
 
@@ -186,6 +195,8 @@ make test
 The bump script updates:
 - package versions in workspace `Cargo.toml` files
 - internal workspace dependency pins (`contrail-types`, `scrapers`, `importer`, `contrail-memex`, `contrail-cli`)
+
+For changes confined to the embedded native-history engine, bump only `tools/contrail/Cargo.toml`, `contrails/Cargo.toml` (including its CLI dependency), and their `Cargo.lock` entries. The workspace-wide bump script is not needed. After checks and publication approval, publish `contrail-cli` first, then `contrails`. Keep unrelated local policy changes out of the release.
 
 Publish in dependency order:
 

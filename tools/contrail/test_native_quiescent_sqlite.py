@@ -126,6 +126,46 @@ class QuiescentSQLiteSnapshotTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(source_path.read_bytes()).digest(), before)
             self.assertTrue(Path(str(source_path) + "-journal").exists())
 
+    def test_projected_closed_store_copy_is_removed_before_compaction(self):
+        for app, sanitizer_name in (("codex", "sanitize_codex_snapshot"),
+                                    ("cursor-desktop", "sanitize_desktop_snapshot")):
+            with self.subTest(app=app), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source_path = root / "source.sqlite"
+                destination = root / "snapshot.sqlite"
+                self._closed_wal_header(source_path)
+                with contextlib.closing(sqlite3.connect(source_path)) as db:
+                    if app == "codex":
+                        db.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,title TEXT)")
+                        db.execute("INSERT INTO threads VALUES('session','history.jsonl','history')")
+                    else:
+                        db.execute("CREATE TABLE ItemTable(key TEXT,value TEXT)")
+                        db.execute("INSERT INTO ItemTable VALUES('composer.composerData','history')")
+                    db.commit()
+                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                for suffix in ("-wal", "-shm", "-journal"):
+                    Path(str(source_path) + suffix).unlink(missing_ok=True)
+                before = source_path.read_bytes()
+                _real_connect, connect, _databases = self._mock_first_live_query(source_path)
+                sanitizer = getattr(history, sanitizer_name)
+                projected = []
+
+                def project(path, max_bytes=None):
+                    self.assertEqual(list(root.glob("closed-store-*")), [])
+                    self.assertEqual(max_bytes, len(before))
+                    projected.append(path)
+                    return sanitizer(path, max_bytes=max_bytes)
+
+                source = self._source(source_path)
+                source["app"] = app
+                with mock.patch.object(history.sqlite3, "connect", side_effect=connect), \
+                     mock.patch.object(history, sanitizer_name, side_effect=project):
+                    result = history.snapshot_file(source, destination, 2 * len(before))
+                self.assertEqual(projected, [destination])
+                self.assertEqual(result["history_projection"]["quick_check"], "ok")
+                self.assertEqual(source_path.read_bytes(), before)
+                self.assertEqual(set(root.iterdir()), {source_path, destination})
+
 
 if __name__ == "__main__":
     unittest.main()
