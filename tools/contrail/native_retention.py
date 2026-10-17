@@ -16,6 +16,15 @@ import sqlite3
 import time
 from pathlib import Path
 
+try:
+    from compression import zstd as _retention_zstd
+except ImportError:
+    _retention_zstd = None
+
+_retention_read_errors = (OSError, UnicodeError, EOFError)
+if _retention_zstd is not None:
+    _retention_read_errors += (_retention_zstd.ZstdError,)
+
 
 def _retention_epoch(value):
     """Accept finite Unix seconds/milliseconds or timezone-qualified ISO times."""
@@ -79,9 +88,13 @@ def _retention_rollout(path):
     latest = None
     fork_ids = set()
     errors = []
+    compressed = path.name.endswith(".jsonl.zst")
+    if compressed and _retention_zstd is None:
+        return None, 0, fork_ids, ["compressed_rollout_decoder_unavailable"]
     try:
         before = path.stat()
-        with path.open("r", encoding="utf-8") as stream:
+        opener = _retention_zstd.open if compressed else open
+        with opener(path, "rt", encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
                     continue
@@ -110,7 +123,7 @@ def _retention_rollout(path):
         # Touching a file only makes the planner more conservative.
         latest = max(latest or 0, after.st_mtime)
         return latest, after.st_size, fork_ids, sorted(set(errors))
-    except (OSError, UnicodeError):
+    except _retention_read_errors:
         return None, 0, fork_ids, ["unreadable_rollout"]
 
 
@@ -239,6 +252,14 @@ def retention_plan(home: Path, inventory: dict, days=90) -> dict:
             if thread_id in automation_targets:
                 entry["reasons"].append("automation_linked")
             path = Path(rollout) if isinstance(rollout, str) else None
+            # Codex keeps the original .jsonl metadata path after compression.
+            if (path is not None and _retention_within(path, home)
+                    and not path.exists() and path.name.endswith(".jsonl")):
+                compressed_path = path.with_name(path.name + ".zst")
+                if compressed_path.exists() or compressed_path.is_symlink():
+                    path = compressed_path
+                    entry["native_rollout_path"] = rollout
+                    entry["path"] = str(path)
             if path is None or not _retention_within(path, home):
                 blockers.append("unsafe_or_unknown_rollout_path")
             elif not path.is_file():

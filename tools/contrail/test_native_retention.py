@@ -57,6 +57,74 @@ class NativeRetentionTests(unittest.TestCase):
         with patch.object(retention.time, "time", return_value=self.NOW):
             return retention.retention_plan(self.home, self.inventory, days)
 
+    def compress_thread(self, path, update_native_path=True):
+        compressed = path.with_name(path.name + '.zst')
+        compressed.write_bytes(retention._retention_zstd.compress(path.read_bytes()))
+        path.unlink()
+        os.utime(compressed, (self.OLD, self.OLD))
+        if update_native_path:
+            with sqlite3.connect(self.database) as connection:
+                connection.execute('UPDATE threads SET rollout_path=? WHERE rollout_path=?',
+                                   (str(compressed), str(path)))
+        return compressed
+
+    @unittest.skipIf(retention._retention_zstd is None, 'Python compression.zstd unavailable')
+    def test_compressed_native_file_resolves_unchanged_jsonl_metadata_path(self):
+        path = self.add_thread(event=self.NOW - 10)
+        compressed = self.compress_thread(path, update_native_path=False)
+        entry = self.plan()['entries'][0]
+        self.assertEqual(entry['status'], 'retained_recent')
+        self.assertEqual(entry['path'], str(compressed))
+        self.assertEqual(entry['native_rollout_path'], str(path))
+        self.assertNotIn('rollout_missing', entry['blockers'])
+
+    def test_compressed_fallback_never_follows_symlinks(self):
+        path = self.add_thread()
+        path.unlink()
+        target = self.home / 'outside.jsonl.zst'
+        target.write_bytes(b'sensitive fixture')
+        path.with_name(path.name + '.zst').symlink_to(target)
+        entry = self.plan()['entries'][0]
+        self.assertEqual(entry['status'], 'blocked')
+        self.assertIn('unsafe_or_unknown_rollout_path', entry['blockers'])
+
+    @unittest.skipIf(retention._retention_zstd is None, 'Python compression.zstd unavailable')
+    def test_compressed_activity_and_fork_references_are_preserved(self):
+        self.add_thread('parent')
+        path = self.add_thread('child', fork='parent')
+        with path.open('a') as stream:
+            stream.write(json.dumps({'timestamp': self.NOW - 100, 'type': 'event_msg'}) + '\n')
+        compressed = self.compress_thread(path)
+        before = compressed.read_bytes()
+        entries = {entry['id']: entry for entry in self.plan()['entries']}
+        self.assertEqual(entries['child']['last_activity_epoch'], self.NOW - 100)
+        self.assertEqual(entries['child']['bytes'], len(before))
+        self.assertTrue(all('fork_dependency' in entry['reasons'] for entry in entries.values()))
+        self.assertEqual(compressed.read_bytes(), before)
+
+    def test_compressed_without_decoder_blocks_retention(self):
+        path = self.add_thread()
+        compressed = path.with_name(path.name + '.zst')
+        path.rename(compressed)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute('UPDATE threads SET rollout_path=?', (str(compressed),))
+        with patch.object(retention, '_retention_zstd', None):
+            entry = self.plan()['entries'][0]
+        self.assertEqual(entry['status'], 'blocked')
+        self.assertIn('compressed_rollout_decoder_unavailable', entry['blockers'])
+
+    @unittest.skipIf(retention._retention_zstd is None, 'Python compression.zstd unavailable')
+    def test_corrupt_or_truncated_compressed_rollout_blocks_retention(self):
+        path = self.compress_thread(self.add_thread())
+        valid = path.read_bytes()
+        for data in (b'invalid-zstd', valid[:-1]):
+            with self.subTest(data=data):
+                path.write_bytes(data)
+                os.utime(path, (self.OLD, self.OLD))
+                entry = self.plan()['entries'][0]
+                self.assertEqual(entry['status'], 'blocked')
+                self.assertIn('unreadable_rollout', entry['blockers'])
+
     def test_old_session_is_only_a_blocked_age_candidate(self):
         self.add_thread()
         result = self.plan()

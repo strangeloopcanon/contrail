@@ -108,7 +108,8 @@ def discover(home: Path):
     # Codex transcript trees and versioned native metadata/projection databases.
     codex = home / ".codex"
     for directory in ("sessions", "archived_sessions"):
-        tree("codex", codex / directory, lambda path: path.suffix == ".jsonl")
+        tree("codex", codex / directory,
+             lambda path: path.name.endswith((".jsonl", ".jsonl.zst")))
     for name in ("session_index.jsonl", "history.jsonl"):
         add("codex", codex / name)
     for path, info in _children(codex, exclusions):

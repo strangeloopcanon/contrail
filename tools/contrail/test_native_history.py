@@ -81,6 +81,40 @@ class NativeHistoryTests(unittest.TestCase):
             shutil.copyfile(run / item['name'], directory / item['name'])
         return directory
 
+    def test_compressed_codex_incremental_preserves_exact_bytes_and_selected_recovery(self):
+        plain = self.source('.codex/sessions/original.jsonl', b'native fixture\n')
+        inventory = history.discover(self.home)
+        inventory['scope'] = 'all installed default-profile apps'
+        base = Path(history.backup(self.home, self.output, inventory=inventory,
+                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        # A complete Zstandard frame containing a synthetic session_meta event.
+        compressed = bytes.fromhex(
+            '28b52ffd20410902007b2274696d657374616d70223a312c2274797065223a22'
+            '73657373696f6e5f6d657461222c227061796c6f6164223a7b226964223a22'
+            '66697874757265227d7d0a')
+        source = self.source('.codex/archived_sessions/compressed.jsonl.zst', compressed)
+        inventory = history.discover(self.home)
+        inventory['scope'] = 'all installed default-profile apps'
+        run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
+                   scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        manifest = self.manifest(run)
+        self.assertEqual(manifest['comparison']['new_files'], 1)
+        self.assertEqual(manifest['comparison']['unchanged_files'], 1)
+        self.assertEqual([record['name'] for record in manifest['files']], [source['relative']])
+        record = manifest['files'][0]
+        self.assertEqual(record['bytes'], len(compressed))
+        self.assertEqual(record['sha256'], hashlib.sha256(compressed).hexdigest())
+        plan = history.restore_plan(run, [source['relative']])
+        self.assertEqual([origin['run_id'] for origin in plan['required_runs']], [run.name])
+        restored = self.root / 'selected-compressed'
+        history.extract_selected(run, restored, [source['relative']])
+        self.assertEqual((restored / source['relative']).read_bytes(), compressed)
+        self.assertFalse((restored / plain['relative']).exists())
+        unchanged = Path(history.backup(self.home, self.output, inventory=inventory, base_run=run,
+                         scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        self.assertEqual(self.manifest(unchanged)['comparison']['unchanged_files'], 2)
+        self.assertEqual(self.manifest(unchanged)['files'], [])
+
     def test_readback_verifies_released_payload_and_preserves_original_evidence(self):
         source = self.source('session.jsonl', b'original native fixture')
         database = self.source('history.sqlite', sqlite=True)

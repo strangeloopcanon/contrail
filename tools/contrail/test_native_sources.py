@@ -34,7 +34,9 @@ class NativeSourcesTests(unittest.TestCase):
     def test_allowlist_includes_history_and_excludes_credentials(self):
         included = {
             ".codex/sessions/2026/01/rollout.jsonl": False,
+            ".codex/sessions/2026/01/compressed.jsonl.zst": False,
             ".codex/archived_sessions/rollout.jsonl": False,
+            ".codex/archived_sessions/compressed.jsonl.zst": False,
             ".codex/state_5.sqlite": True,
             ".codex/thread_history_1.sqlite": True,
             ".codex/history.jsonl": False,
@@ -84,9 +86,11 @@ class NativeSourcesTests(unittest.TestCase):
     def test_unknown_database_and_transcript_files_are_reported(self):
         self.file(".codex/state_future.sqlite")
         self.file(".codex/sessions/unknown.bin")
+        self.file(".codex/sessions/unknown.zst")
+        self.file(".codex/sessions/unfinished.jsonl.zst.tmp")
         result = discover(self.home)
         self.assertEqual(result["sources"], [])
-        self.assertEqual(len(result["unsupported"]), 2)
+        self.assertEqual(len(result["unsupported"]), 4)
 
     def test_symlink_files_directories_and_ancestors_are_not_followed(self):
         target = self.file("outside/secret.jsonl")
