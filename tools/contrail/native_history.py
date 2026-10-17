@@ -502,7 +502,9 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
     destination = cloud_destination(cloud_parent_id, cloud_owner)
     home, output = Path(home).absolute(), Path(output).absolute()
     # Do not allow a backup destination within a live app store.
-    for live in (home / '.codex', home / '.cursor', home / '.claude', home / '.gemini/antigravity', home / 'Library/Application Support/Cursor'):
+    for live in (home / '.codex', home / '.cursor', home / '.claude', home / '.gemini/antigravity',
+                 home / '.gemini/antigravity-cli', home / '.gemini/antigravity-ide',
+                 home / 'Library/Application Support/Cursor'):
         if output == live or live in output.parents:
             raise ValueError('output must be outside live app stores')
     for ancestor in [output, *output.parents]:

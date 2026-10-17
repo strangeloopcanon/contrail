@@ -1088,6 +1088,70 @@ class AntigravityHistoryTests(unittest.TestCase):
     backup = NativeHistoryTests.backup
     manifest = NativeHistoryTests.manifest
 
+    def test_antigravity_only_incremental_adds_legacy_profiles_without_path_collisions(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        relative = 'conversations/' + identity + '.pb'
+        current = self.source('.gemini/antigravity/' + relative, b'current-profile')
+        current['app'] = 'antigravity'
+        inventory = history.discover(self.home)
+        inventory['scope'] = ['antigravity']
+        base = Path(history.backup(self.home, self.output, inventory=inventory,
+                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        expected = {current['relative']: b'current-profile'}
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            source = self.source('.gemini/' + profile + '/' + relative, profile.encode())
+            expected[source['relative']] = profile.encode()
+        summary = self.source('.gemini/antigravity-cli/jetbox_summaries_proto.pb', b'legacy-summary')
+        expected[summary['relative']] = b'legacy-summary'
+        self.source('.gemini/antigravity-backup/' + relative, b'redundant-copy')
+        self.source('.gemini/antigravity-cli/auth.json', b'private-profile-marker')
+        inventory = history.discover(self.home)
+        inventory['scope'] = ['antigravity']
+        run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
+                   scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        manifest = self.manifest(run)
+        self.assertEqual(manifest['inventory']['scope'], ['antigravity'])
+        self.assertEqual(manifest['comparison']['new_files'], 3)
+        self.assertEqual(manifest['comparison']['unchanged_files'], 1)
+        self.assertEqual({record['name'] for record in manifest['catalog']}, set(expected))
+        self.assertEqual({record['app'] for record in manifest['catalog']}, {'antigravity'})
+        target = self.root / 'restored-legacy-profiles'
+        history.extract(run, target)
+        self.assertEqual({name: (target / name).read_bytes() for name in expected}, expected)
+        self.assertFalse((target / '.gemini/antigravity-backup').exists())
+        self.assertFalse((target / '.gemini/antigravity-cli/auth.json').exists())
+
+    def test_antigravity_legacy_unknown_database_schema_fails_without_native_changes(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            with self.subTest(profile=profile):
+                source = self.source('.gemini/' + profile + '/conversations/' + identity + '.db', sqlite=True)
+                source['app'] = 'antigravity'
+                with contextlib.closing(sqlite3.connect(source['path'])) as database:
+                    database.execute('CREATE TABLE account_credentials(token TEXT)')
+                    database.execute("INSERT INTO account_credentials VALUES ('private-profile-marker')")
+                    database.commit()
+                before = Path(source['path']).read_bytes()
+                with self.assertRaisesRegex(ValueError, 'unrecognized Antigravity history database layout'):
+                    self.backup([source])
+                self.assertEqual(Path(source['path']).read_bytes(), before)
+                self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_backup_output_refuses_legacy_antigravity_profiles_and_descendants(self):
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            root = self.home / '.gemini' / profile
+            for output in (root, root / 'backups', root / 'nested/backups'):
+                with self.subTest(output=output):
+                    with self.assertRaisesRegex(ValueError, 'outside live app stores'):
+                        history.backup(self.home, output, inventory={'sources': []})
+                    self.assertFalse(root.exists())
+            root.mkdir(parents=True)
+            alias = self.root / (profile + '-alias')
+            alias.symlink_to(root, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink output'):
+                history.backup(self.home, alias / 'backups', inventory={'sources': []})
+            self.assertFalse((root / 'backups').exists())
+
     def test_antigravity_incremental_from_legacy_all_apps_and_recovery(self):
         codex = self.source(".codex/sessions/session.jsonl", b"old-history")
         codex['app'] = 'codex'
@@ -1150,17 +1214,20 @@ class AntigravityHistoryTests(unittest.TestCase):
     def test_antigravity_cli_scope_inventory_catalog_and_output_guard(self):
         import sys
         identity = '12345678-1234-1234-1234-123456789012'
-        self.source('.gemini/antigravity/conversations/' + identity + '.pb', b'fixture')
+        for profile in ('antigravity', 'antigravity-cli', 'antigravity-ide'):
+            self.source('.gemini/' + profile + '/conversations/' + identity + '.pb', b'fixture')
+        self.source('.codex/sessions/unselected.jsonl', b'unselected-app')
         with mock.patch.object(sys, 'argv', ['history', 'inventory', '--home', str(self.home)]), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
-        self.assertEqual(json.loads(output.getvalue())['app_counts']['antigravity'], 1)
+        self.assertEqual(json.loads(output.getvalue())['app_counts']['antigravity'], 3)
         with mock.patch.object(sys, 'argv', ['history', 'backup', '--home', str(self.home), '--output', str(self.output), '--app', 'antigravity', '--scratch-mib', '1', '--output-mib', '2']), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
         run = Path(json.loads(output.getvalue())['run'])
         self.assertEqual(self.manifest(run)['inventory']['scope'], ['antigravity'])
+        self.assertEqual({record['app'] for record in self.manifest(run)['files']}, {'antigravity'})
         with mock.patch.object(sys, 'argv', ['history', 'catalog', '--run', str(run), '--app', 'antigravity']), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
-        self.assertEqual(json.loads(output.getvalue())['matched_files'], 1)
+        self.assertEqual(json.loads(output.getvalue())['matched_files'], 3)
         with self.assertRaisesRegex(ValueError, 'outside live app stores'):
             history.backup(self.home, self.home / '.gemini/antigravity/backup')
 
