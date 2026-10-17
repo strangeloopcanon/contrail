@@ -870,7 +870,7 @@ def release_local(run, accept_size_only=False):
     return data
 
 
-def extract(run, destination):
+def extract(run, destination, max_bytes=64 * 1024**3):
     destination = Path(destination).absolute()
     if destination.exists():
         raise ValueError('extraction destination must not exist')
@@ -878,11 +878,11 @@ def extract(run, destination):
         if ancestor.is_symlink():
             raise ValueError('symlink extraction parent is unsupported')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    verify(run)
+    verify(run, max_bytes=max_bytes)
     with tempfile.TemporaryDirectory(prefix='.contrail-extract-', dir=destination.parent) as temporary:
         staging = Path(temporary) / 'restored'
         staging.mkdir(mode=0o700)
-        receipt = verify(run, extract_to=staging)
+        receipt = verify(run, extract_to=staging, max_bytes=max_bytes)
         # rename is atomic on the same filesystem; destination existence rechecked.
         if destination.exists():
             raise ValueError('extraction destination appeared during verification')
@@ -939,7 +939,7 @@ def main():
             command.add_argument('--destination', type=Path, required=True)
             command.add_argument('--member', action='append', help='exact catalog name; repeat to extract selected files only')
             command.add_argument('--max-expanded-mib', type=int, default=65536,
-                                 help='selected recovery: expanded byte budget across required origin archives')
+                                 help='full or selected recovery: expanded member byte budget across required origin archives')
         if name == 'restore-plan':
             command.add_argument('--member', action='append', required=True,
                                  help='exact catalog name; repeat to plan selected files without downloading')
@@ -986,13 +986,13 @@ def main():
             raise ValueError('--max-expanded-mib must be positive')
         result = verify(args.run, max_bytes=args.max_expanded_mib * 1024**2)
     elif args.command == 'extract':
+        if args.max_expanded_mib <= 0:
+            raise ValueError('--max-expanded-mib must be positive')
         if args.member:
             result = extract_selected(args.run, args.destination, args.member,
                                       max_bytes=args.max_expanded_mib * 1024**2)
         else:
-            if args.max_expanded_mib != 65536:
-                raise ValueError('--max-expanded-mib requires --member')
-            result = extract(args.run, args.destination)
+            result = extract(args.run, args.destination, max_bytes=args.max_expanded_mib * 1024**2)
     elif args.command == 'restore-plan':
         result = restore_plan(args.run, args.member)
     elif args.command == 'catalog':

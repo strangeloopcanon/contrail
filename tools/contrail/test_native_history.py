@@ -686,6 +686,44 @@ class NativeHistoryTests(unittest.TestCase):
                         error = json.loads(result.stderr)['error']
                         self.assertIn('must be positive' if budget <= 0 else 'verification budget', error)
 
+    def test_full_extract_cli_forwards_budget_to_both_verification_passes(self):
+        source = self.source('session.jsonl', b'a' * 8)
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * 8)
+        run = self.backup([source], base_run=base)
+        real_verify = history.verify
+        default_bytes = 65536 * 1024**2
+        for budget in (None, 131072, 0, -1):
+            with self.subTest(budget=budget):
+                destination = self.root / ('full-extract-' + str(budget))
+                arguments = ['history', 'extract', '--run', str(run),
+                             '--destination', str(destination)]
+                if budget is not None:
+                    arguments += ['--max-expanded-mib', str(budget)]
+                checked_budgets = []
+
+                def scaled_verify(*args, max_bytes=default_bytes, **kwargs):
+                    checked_budgets.append(max_bytes)
+                    # Scale the real 64/128 GiB CLI limits to 8/16-byte fixtures.
+                    return real_verify(*args, max_bytes=max_bytes * 8 // default_bytes, **kwargs)
+
+                with mock.patch.object(sys, 'argv', arguments), \
+                        mock.patch.object(history, 'verify', side_effect=scaled_verify), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    if budget == 131072:
+                        history.main()
+                    else:
+                        expected = 'verification budget' if budget is None else 'must be positive'
+                        with self.assertRaisesRegex(ValueError, expected):
+                            history.main()
+                if budget == 131072:
+                    self.assertEqual(checked_budgets, [2 * default_bytes, 2 * default_bytes])
+                    self.assertEqual(json.loads(output.getvalue())['status'], 'verified')
+                    self.assertEqual((destination / source['relative']).read_bytes(), b'b' * 8)
+                else:
+                    self.assertEqual(checked_budgets, [default_bytes] if budget is None else [])
+                    self.assertFalse(destination.exists())
+
     def test_lock_and_retry_preserve_completed_backup(self):
         source = self.source("session.jsonl")
         run = self.backup([source])
