@@ -953,6 +953,105 @@ class NativeHistoryTests(unittest.TestCase):
         self.assertEqual(result["release_policy"], "provider-upload-integrity")
         self.assertFalse(any(part.exists() for part in self.parts(run)))
 
+    def test_strict_release_accepts_bound_full_parent_readback_without_rewriting_history(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        history.verify_readback(base, downloaded)
+        retained = {path.name: path.read_bytes() for path in base.iterdir()}
+        Path(source['path']).write_bytes(b'delta')
+        run = self.backup([source], base_run=base)
+        self.record(run, self.cloud_receipt(run))
+        proof_path = base / 'cloud-readback.json'
+        proof = json.loads(proof_path.read_text())
+        proof['files'][0]['sha256'] = '0' * 64
+        history.write_json(proof_path, proof)
+        with self.assertRaisesRegex(ValueError, 'readback evidence'):
+            history.release_local(run)
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+        proof_path.write_bytes(retained[proof_path.name])
+        result = history.release_local(run)
+        self.assertEqual(result['release_policy'], 'checksums-required')
+        self.assertEqual(result['verification_level'], 'sha256')
+        self.assertFalse(result['accept_size_only'])
+        self.assertEqual({name: (base / name).read_bytes() for name in retained}, retained)
+        self.assertFalse(any(part.exists() for part in self.parts(run)))
+
+    def test_parent_readback_refuses_tampered_incomplete_or_wrong_origin_proofs(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        original = history.verify_readback(base, downloaded)
+        manifest = self.manifest(base)
+        mutations = [
+            lambda p: p.update(format='unknown'),
+            lambda p: p.update(status='pending'),
+            lambda p: p.update(verification_level='size-only'),
+            lambda p: p.update(run_id='other-run'),
+            lambda p: p.update(manifest_sha256='0' * 64),
+            lambda p: p.update(archive_sha256='0' * 64),
+            lambda p: p.update(owner='other@example.invalid'),
+            lambda p: p.update(parent_folder_id='other-parent'),
+            lambda p: p.update(folder_id='other-folder'),
+            lambda p: p.update(private=False),
+            lambda p: p['bindings'].pop('verification.json'),
+            lambda p: p['bindings'].update({'cloud-receipt.json': '0' * 64}),
+            lambda p: p['archive_verification'].update(status='pending'),
+            lambda p: p['archive_verification'].update(files=0),
+            lambda p: p['archive_verification'].update(sqlite_integrity='failed'),
+            lambda p: p['archive_verification'].update(archive_sha256='0' * 64),
+            lambda p: p['archive_verification'].pop('verification'),
+            lambda p: p.pop('archive_verification'),
+            lambda p: p['files'].pop(),
+            lambda p: p['files'].append(p['files'][0]),
+            lambda p: p['files'][0].update(id='other-id'),
+            lambda p: p['files'][0].update(bytes=999),
+            lambda p: p['files'][0].update(sha256='0' * 64),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                proof = json.loads(json.dumps(original))
+                mutate(proof)
+                history.write_json(base / 'cloud-readback.json', proof)
+                with self.assertRaisesRegex(ValueError, 'readback evidence'):
+                    history.verified_cloud_archive(base, manifest)
+
+    def test_parent_readback_refuses_stale_original_evidence_and_reused_remote_ids(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        history.verify_readback(base, downloaded)
+        for name, field in (('verification.json', 'verified_utc'),
+                            ('cloud-handoff.json', 'workflow'), ('cloud-receipt.json', 'recorded_utc')):
+            with self.subTest(name=name):
+                path = base / name
+                original = path.read_bytes()
+                changed = json.loads(original)
+                changed[field] = 'changed'
+                history.write_json(path, changed)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'readback evidence|cloud handoff'):
+                        history.verified_cloud_archive(base, self.manifest(base))
+                finally:
+                    path.write_bytes(original)
+        receipt_path = base / 'cloud-receipt.json'
+        receipt = json.loads(receipt_path.read_text())
+        receipt['files'][1]['id'] = receipt['files'][0]['id']
+        history.write_json(receipt_path, receipt)
+        proof_path = base / 'cloud-readback.json'
+        proof = json.loads(proof_path.read_text())
+        proof['files'][1]['id'] = proof['files'][0]['id']
+        proof['bindings']['cloud-receipt.json'] = history.digest_file(receipt_path)
+        history.write_json(proof_path, proof)
+        with self.assertRaisesRegex(ValueError, 'readback evidence'):
+            history.verified_cloud_archive(base, self.manifest(base))
+
     def test_size_only_released_base_requires_unchanged_authorization_bindings(self):
         source = self.source("session.jsonl", b"base")
         base = self.backup([source])

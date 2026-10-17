@@ -646,10 +646,63 @@ def check_local_verification(directory, manifest):
         raise ValueError('verification does not match manifest')
 
 
+def verified_cloud_readback(directory, manifest, receipt):
+    """Validate retained full readback evidence without changing upload receipts.
+
+    This checks evidence bindings, not current provider availability. Every
+    saved remote ID and downloaded hash must match the unchanged handoff.
+    """
+    path = directory / 'cloud-readback.json'
+    if not path.exists() and not path.is_symlink():
+        return False
+    try:
+        proof = json.loads(regular_path(path).read_text())
+        bindings = {name: digest_file(regular_path(directory / name)) for name in (
+            'manifest.json', 'verification.json', 'cloud-handoff.json', 'cloud-receipt.json')}
+        if (proof.get('format') != 'contrail-native-history-readback-v1'
+                or proof.get('status') != 'verified' or proof.get('verification_level') != 'sha256'
+                or proof.get('run_id') != manifest['run_id']
+                or proof.get('manifest_sha256') != bindings['manifest.json']
+                or proof.get('archive_sha256') != manifest['archive_sha256']
+                or proof.get('bindings') != bindings
+                or not isinstance(proof.get('verified_utc'), str) or not proof['verified_utc']):
+            raise ValueError('readback evidence does not match unchanged archive bindings')
+        if (proof.get('private') is not True or any(proof.get(key) != receipt[key]
+                for key in ('run_id', 'parent_folder_id', 'folder_id', 'owner'))):
+            raise ValueError('readback evidence destination/owner/run mismatch')
+        archive = proof['archive_verification']
+        if (archive.get('status') != 'verified' or archive.get('sqlite_integrity') != 'ok'
+                or archive.get('archive_sha256') != manifest['archive_sha256']
+                or type(archive.get('files')) is not int or archive['files'] != len(manifest['files'])
+                or archive.get('verification') != 'all parts/full archive/member SHA256 plus SQLite integrity; native app import untested'
+                or not isinstance(archive.get('verified_utc'), str) or not archive['verified_utc']):
+            raise ValueError('readback evidence lacks complete archive/member/SQLite verification')
+        handoff_data = json.loads(regular_path(directory / 'cloud-handoff.json').read_text())
+        expected = {item['name']: item for item in handoff_data['files']}
+        remote = {item['name']: item for item in receipt['files']}
+        remote_ids = [item['id'] for item in receipt['files']]
+        files = proof['files']
+        if (not isinstance(files, list) or len(files) != len(expected)
+                or any(not isinstance(item, str) or not item for item in remote_ids)
+                or len(set(remote_ids)) != len(remote_ids)
+                or {item['name'] for item in files} != set(expected)):
+            raise ValueError('readback evidence has incomplete or duplicate file/ID coverage')
+        for item in files:
+            name = item['name']
+            if (item.get('id') != remote[name]['id'] or type(item.get('bytes')) is not int
+                    or item['bytes'] != expected[name]['bytes']
+                    or item.get('sha256') != expected[name]['sha256']):
+                raise ValueError('readback evidence file ID/size/SHA256 mismatch')
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValueError('malformed readback evidence') from error
+    return True
+
+
 def verified_cloud_archive(directory, manifest, accept_size_only=False, allow_released_size_only=False):
     receipt = json.loads(regular_path(directory / 'cloud-receipt.json').read_text())
     validated = validate_cloud(directory, receipt, allow_missing_parts=True)
-    if validated['verification_level'] not in ('md5', 'sha256'):
+    if (validated['verification_level'] not in ('md5', 'sha256')
+            and not verified_cloud_readback(directory, manifest, validated)):
         missing_parts = any(not (directory / part['name']).is_file() for part in manifest['parts'])
         authorized = authorized_size_only_release(directory, manifest)
         if (not (accept_size_only or (allow_released_size_only and authorized))
