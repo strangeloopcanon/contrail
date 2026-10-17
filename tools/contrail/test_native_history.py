@@ -377,6 +377,18 @@ class NativeHistoryTests(unittest.TestCase):
         with self.assertRaises((EOFError, OSError, tarfile.TarError, ValueError)):
             history.verify(run)
 
+    def test_verification_budget_still_bounds_padding_after_tar_terminator(self):
+        run = self.archive_fixture([('safe.txt', b'fixture', tarfile.REGTYPE)])
+        manifest = self.manifest(run)
+        part = run / manifest['parts'][0]['name']
+        data = gzip.compress(gzip.decompress(part.read_bytes()) + b'\0' * 65536, mtime=0)
+        part.write_bytes(data)
+        manifest['parts'][0].update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+        manifest.update(archive_bytes=len(data), archive_sha256=hashlib.sha256(data).hexdigest())
+        history.write_json(run / 'manifest.json', manifest)
+        with self.assertRaisesRegex(ValueError, 'bounded TAR allowance'):
+            history.verify(run, max_bytes=7, include_base=False)
+
     def test_manifest_and_tar_path_traversal_are_rejected(self):
         for name in ("../outside", "/absolute", "dir/../outside", "dir\\outside", "dir//file"):
             with self.subTest(name=name):
@@ -603,6 +615,76 @@ class NativeHistoryTests(unittest.TestCase):
                     history.backup(self.home, self.output, inventory={"sources": [source]}, **options)
                 self.assertEqual(list(self.output.iterdir()), [])
                 self.assertEqual(Path(source["path"]).read_bytes(), bytes(range(256)))
+
+    def test_incremental_verification_budgets_only_current_checked_archive(self):
+        previous = self.source('retained.jsonl', b'a' * 32)
+        base = self.backup([previous])
+        current = self.source('current.jsonl', b'b' * 8)
+        real_verify = history.verify
+
+        def bounded_verify(*args, **kwargs):
+            return real_verify(*args, max_bytes=8, **kwargs)
+
+        # Exercise backup's final verification and cloud handoff, with a small
+        # budget standing in for the default 64 GiB rather than large fixtures.
+        with mock.patch.object(history, 'verify', side_effect=bounded_verify):
+            run = self.backup([current], base_run=base)
+        self.assertEqual(sum(record['bytes'] for record in self.manifest(run)['catalog']), 40)
+        self.assertEqual(history.verify(run, max_bytes=8, include_base=False)['status'], 'verified')
+        destination = self.root / 'current-only'
+        history.verify(run, extract_to=destination, max_bytes=8, include_base=False)
+        self.assertEqual((destination / current['relative']).read_bytes(), b'b' * 8)
+        self.assertFalse((destination / previous['relative']).exists())
+        for extract_to in (None, self.root / 'oversized-current'):
+            with self.subTest(extract_to=extract_to):
+                with mock.patch.object(history, 'verify_archive') as archive:
+                    with self.assertRaisesRegex(ValueError, 'verification budget'):
+                        history.verify(run, extract_to=extract_to, max_bytes=7, include_base=False)
+                    archive.assert_not_called()
+        self.assertFalse((self.root / 'oversized-current').exists())
+
+    def test_full_chain_budget_counts_all_checked_versions_before_extraction(self):
+        source = self.source('session.jsonl', b'a' * 32)
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * 16)
+        run = self.backup([source], base_run=base)
+        self.assertEqual(sum(record['bytes'] for record in self.manifest(run)['catalog']), 16)
+        # The final overlay is 16 bytes, but checking/extracting both versions
+        # consumes 48 bytes. Each individual origin also fits this smaller limit.
+        for extract_to in (None, self.root / 'oversized-chain'):
+            with self.subTest(extract_to=extract_to):
+                with mock.patch.object(history, 'verify_archive') as archive:
+                    with self.assertRaisesRegex(ValueError, 'verification budget'):
+                        history.verify(run, extract_to=extract_to, max_bytes=32)
+                    archive.assert_not_called()
+        self.assertFalse((self.root / 'oversized-chain').exists())
+        destination = self.root / 'full-chain'
+        receipt = history.verify(run, extract_to=destination, max_bytes=48)
+        self.assertTrue(receipt['base_archives_checked'])
+        self.assertEqual((destination / source['relative']).read_bytes(), b'b' * 16)
+
+    def test_verify_cli_accepts_explicit_chain_budget_and_rejects_nonpositive(self):
+        source = self.source('session.jsonl', b'a' * (600 * 1024))
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * (600 * 1024))
+        run = self.backup([source], base_run=base)
+        directory = Path(history.__file__).parent
+        embedded = '\n'.join((directory / name).read_text() for name in (
+            'native_sources.py', 'native_retention.py', 'native_restore.py', 'native_history.py'))
+        for launcher in ([sys.executable, str(directory / 'native_history.py')],
+                         [sys.executable, '-c', embedded]):
+            for budget, succeeds in ((1, False), (2, True), (0, False), (-1, False), (None, True)):
+                with self.subTest(embedded='-c' in launcher, budget=budget):
+                    arguments = ['verify', '--run', str(run)]
+                    if budget is not None:
+                        arguments += ['--max-expanded-mib', str(budget)]
+                    result = subprocess.run(launcher + arguments, text=True, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode == 0, succeeds, result.stderr)
+                    if succeeds:
+                        self.assertEqual(json.loads(result.stdout)['status'], 'verified')
+                    else:
+                        error = json.loads(result.stderr)['error']
+                        self.assertIn('must be positive' if budget <= 0 else 'verification budget', error)
 
     def test_lock_and_retry_preserve_completed_backup(self):
         source = self.source("session.jsonl")

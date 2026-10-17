@@ -470,9 +470,16 @@ def verified_base(folder):
 
 
 def verify(folder, extract_to=None, max_bytes=64 * 1024**3, include_base=True):
+    """Bound member bytes across the archives actually checked or extracted.
+
+    Full-chain verification counts every stored version, including overwritten
+    members. Current-only verification does not decompress retained base data.
+    Per-archive TAR overhead and trailing padding remain bounded separately.
+    """
     chain, catalog = archive_chain(folder)
-    if sum(record['bytes'] for record in catalog.values()) > max_bytes:
-        raise ValueError('expanded backup chain exceeds verification budget')
+    selected = chain if include_base else chain[-1:]
+    if sum(record['bytes'] for _, manifest in selected for record in manifest['files']) > max_bytes:
+        raise ValueError('expanded selected archives exceed verification budget')
     if extract_to:
         target = Path(extract_to).absolute()
         for ancestor in [target, *target.parents]:
@@ -480,7 +487,6 @@ def verify(folder, extract_to=None, max_bytes=64 * 1024**3, include_base=True):
                 raise ValueError('symlink extraction destination is unsupported')
         if target.exists() and any(target.iterdir()):
             raise ValueError('chain extraction destination must be empty')
-    selected = chain if include_base else chain[-1:]
     for index, (directory, manifest) in enumerate(selected):
         receipt = verify_archive(directory, extract_to, max_bytes, overlay=index > 0)
     receipt.update({'files': len(catalog), 'stored_files': len(chain[-1][1]['files']),
@@ -926,6 +932,9 @@ def main():
     for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'verify-readback', 'release-local'):
         command = commands.add_parser(name)
         command.add_argument('--run', type=Path, required=True)
+        if name == 'verify':
+            command.add_argument('--max-expanded-mib', type=int, default=65536,
+                                 help='expanded member byte budget across all checked origin archives')
         if name == 'extract':
             command.add_argument('--destination', type=Path, required=True)
             command.add_argument('--member', action='append', help='exact catalog name; repeat to extract selected files only')
@@ -973,7 +982,9 @@ def main():
     elif args.command == 'retention-apply':
         raise ValueError('native apply blocked: cannot prove running/pinned/automation/fork protection through supported interfaces; no histories deleted')
     elif args.command == 'verify':
-        result = verify(args.run)
+        if args.max_expanded_mib <= 0:
+            raise ValueError('--max-expanded-mib must be positive')
+        result = verify(args.run, max_bytes=args.max_expanded_mib * 1024**2)
     elif args.command == 'extract':
         if args.member:
             result = extract_selected(args.run, args.destination, args.member,
