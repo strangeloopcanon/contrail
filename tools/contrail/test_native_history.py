@@ -98,6 +98,8 @@ class NativeHistoryTests(unittest.TestCase):
         run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
         manifest = self.manifest(run)
+        self.assertEqual(manifest['retention'],
+                         'archive does not set a native retention window; review with retention-plan --days; native deletion disabled')
         self.assertEqual(manifest['comparison']['new_files'], 1)
         self.assertEqual(manifest['comparison']['unchanged_files'], 1)
         self.assertEqual([record['name'] for record in manifest['files']], [source['relative']])

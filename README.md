@@ -155,7 +155,7 @@ Incremental extraction restores retained history across runs, not a current nati
 
 **Backup space.** SQLite snapshots reserve twice the database size within `--scratch-mib`, including committed WAL pages. Codex and Cursor projections disable rollback journals only in disposable offline copies, compact into one private file, verify it, then replace the snapshot. A failed projection discards the incomplete run. Closed-store fallback copies are removed before compaction. A database larger than half the scratch budget fails before projection. Backup also requires free space for the full scratch and output budgets plus 256 MiB for metadata.
 
-The CLI runs `python3` from `PATH`. Its SQLite library must support `VACUUM INTO` and `journal_mode=OFF`. Some macOS system SQLite builds prohibit journal mode OFF; backup fails safely with those builds. Select a compatible Python runtime through `PATH`, such as Homebrew Python 3.14 on macOS.
+The CLI probes `python3` and `python3.14` from `PATH`, then `/opt/homebrew/bin/python3.14` and `/usr/local/bin/python3.14`. It selects the first compatible runtime with `compression.zstd`, or the first compatible runtime without it. Python 3.9+ and SQLite 3.27+ with `journal_mode=OFF` are required. Without a decoder, compressed retention reads remain blocked; backups still preserve compressed bytes. Set `CONTRAIL_HISTORY_PYTHON` to one executable path or command name to select a runtime explicitly. An invalid override fails instead of selecting another runtime. Direct Python source commands use the interpreter you invoke.
 
 **Limits.**
 
