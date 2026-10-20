@@ -470,9 +470,16 @@ def verified_base(folder):
 
 
 def verify(folder, extract_to=None, max_bytes=64 * 1024**3, include_base=True):
+    """Bound member bytes across the archives actually checked or extracted.
+
+    Full-chain verification counts every stored version, including overwritten
+    members. Current-only verification does not decompress retained base data.
+    Per-archive TAR overhead and trailing padding remain bounded separately.
+    """
     chain, catalog = archive_chain(folder)
-    if sum(record['bytes'] for record in catalog.values()) > max_bytes:
-        raise ValueError('expanded backup chain exceeds verification budget')
+    selected = chain if include_base else chain[-1:]
+    if sum(record['bytes'] for _, manifest in selected for record in manifest['files']) > max_bytes:
+        raise ValueError('expanded selected archives exceed verification budget')
     if extract_to:
         target = Path(extract_to).absolute()
         for ancestor in [target, *target.parents]:
@@ -480,7 +487,6 @@ def verify(folder, extract_to=None, max_bytes=64 * 1024**3, include_base=True):
                 raise ValueError('symlink extraction destination is unsupported')
         if target.exists() and any(target.iterdir()):
             raise ValueError('chain extraction destination must be empty')
-    selected = chain if include_base else chain[-1:]
     for index, (directory, manifest) in enumerate(selected):
         receipt = verify_archive(directory, extract_to, max_bytes, overlay=index > 0)
     receipt.update({'files': len(catalog), 'stored_files': len(chain[-1][1]['files']),
@@ -496,7 +502,9 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
     destination = cloud_destination(cloud_parent_id, cloud_owner)
     home, output = Path(home).absolute(), Path(output).absolute()
     # Do not allow a backup destination within a live app store.
-    for live in (home / '.codex', home / '.cursor', home / '.claude', home / '.gemini/antigravity', home / 'Library/Application Support/Cursor'):
+    for live in (home / '.codex', home / '.cursor', home / '.claude', home / '.gemini/antigravity',
+                 home / '.gemini/antigravity-cli', home / '.gemini/antigravity-ide',
+                 home / 'Library/Application Support/Cursor'):
         if output == live or live in output.parents:
             raise ValueError('output must be outside live app stores')
     for ancestor in [output, *output.parents]:
@@ -638,10 +646,63 @@ def check_local_verification(directory, manifest):
         raise ValueError('verification does not match manifest')
 
 
+def verified_cloud_readback(directory, manifest, receipt):
+    """Validate retained full readback evidence without changing upload receipts.
+
+    This checks evidence bindings, not current provider availability. Every
+    saved remote ID and downloaded hash must match the unchanged handoff.
+    """
+    path = directory / 'cloud-readback.json'
+    if not path.exists() and not path.is_symlink():
+        return False
+    try:
+        proof = json.loads(regular_path(path).read_text())
+        bindings = {name: digest_file(regular_path(directory / name)) for name in (
+            'manifest.json', 'verification.json', 'cloud-handoff.json', 'cloud-receipt.json')}
+        if (proof.get('format') != 'contrail-native-history-readback-v1'
+                or proof.get('status') != 'verified' or proof.get('verification_level') != 'sha256'
+                or proof.get('run_id') != manifest['run_id']
+                or proof.get('manifest_sha256') != bindings['manifest.json']
+                or proof.get('archive_sha256') != manifest['archive_sha256']
+                or proof.get('bindings') != bindings
+                or not isinstance(proof.get('verified_utc'), str) or not proof['verified_utc']):
+            raise ValueError('readback evidence does not match unchanged archive bindings')
+        if (proof.get('private') is not True or any(proof.get(key) != receipt[key]
+                for key in ('run_id', 'parent_folder_id', 'folder_id', 'owner'))):
+            raise ValueError('readback evidence destination/owner/run mismatch')
+        archive = proof['archive_verification']
+        if (archive.get('status') != 'verified' or archive.get('sqlite_integrity') != 'ok'
+                or archive.get('archive_sha256') != manifest['archive_sha256']
+                or type(archive.get('files')) is not int or archive['files'] != len(manifest['files'])
+                or archive.get('verification') != 'all parts/full archive/member SHA256 plus SQLite integrity; native app import untested'
+                or not isinstance(archive.get('verified_utc'), str) or not archive['verified_utc']):
+            raise ValueError('readback evidence lacks complete archive/member/SQLite verification')
+        handoff_data = json.loads(regular_path(directory / 'cloud-handoff.json').read_text())
+        expected = {item['name']: item for item in handoff_data['files']}
+        remote = {item['name']: item for item in receipt['files']}
+        remote_ids = [item['id'] for item in receipt['files']]
+        files = proof['files']
+        if (not isinstance(files, list) or len(files) != len(expected)
+                or any(not isinstance(item, str) or not item for item in remote_ids)
+                or len(set(remote_ids)) != len(remote_ids)
+                or {item['name'] for item in files} != set(expected)):
+            raise ValueError('readback evidence has incomplete or duplicate file/ID coverage')
+        for item in files:
+            name = item['name']
+            if (item.get('id') != remote[name]['id'] or type(item.get('bytes')) is not int
+                    or item['bytes'] != expected[name]['bytes']
+                    or item.get('sha256') != expected[name]['sha256']):
+                raise ValueError('readback evidence file ID/size/SHA256 mismatch')
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValueError('malformed readback evidence') from error
+    return True
+
+
 def verified_cloud_archive(directory, manifest, accept_size_only=False, allow_released_size_only=False):
     receipt = json.loads(regular_path(directory / 'cloud-receipt.json').read_text())
     validated = validate_cloud(directory, receipt, allow_missing_parts=True)
-    if validated['verification_level'] not in ('md5', 'sha256'):
+    if (validated['verification_level'] not in ('md5', 'sha256')
+            and not verified_cloud_readback(directory, manifest, validated)):
         missing_parts = any(not (directory / part['name']).is_file() for part in manifest['parts'])
         authorized = authorized_size_only_release(directory, manifest)
         if (not (accept_size_only or (allow_released_size_only and authorized))
@@ -864,7 +925,7 @@ def release_local(run, accept_size_only=False):
     return data
 
 
-def extract(run, destination):
+def extract(run, destination, max_bytes=64 * 1024**3):
     destination = Path(destination).absolute()
     if destination.exists():
         raise ValueError('extraction destination must not exist')
@@ -872,11 +933,11 @@ def extract(run, destination):
         if ancestor.is_symlink():
             raise ValueError('symlink extraction parent is unsupported')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    verify(run)
+    verify(run, max_bytes=max_bytes)
     with tempfile.TemporaryDirectory(prefix='.contrail-extract-', dir=destination.parent) as temporary:
         staging = Path(temporary) / 'restored'
         staging.mkdir(mode=0o700)
-        receipt = verify(run, extract_to=staging)
+        receipt = verify(run, extract_to=staging, max_bytes=max_bytes)
         # rename is atomic on the same filesystem; destination existence rechecked.
         if destination.exists():
             raise ValueError('extraction destination appeared during verification')
@@ -926,11 +987,14 @@ def main():
     for name in ('verify', 'extract', 'restore-plan', 'catalog', 'cloud-handoff', 'record-cloud', 'verify-readback', 'release-local'):
         command = commands.add_parser(name)
         command.add_argument('--run', type=Path, required=True)
+        if name == 'verify':
+            command.add_argument('--max-expanded-mib', type=int, default=65536,
+                                 help='expanded member byte budget across all checked origin archives')
         if name == 'extract':
             command.add_argument('--destination', type=Path, required=True)
             command.add_argument('--member', action='append', help='exact catalog name; repeat to extract selected files only')
             command.add_argument('--max-expanded-mib', type=int, default=65536,
-                                 help='selected recovery: expanded byte budget across required origin archives')
+                                 help='full or selected recovery: expanded member byte budget across required origin archives')
         if name == 'restore-plan':
             command.add_argument('--member', action='append', required=True,
                                  help='exact catalog name; repeat to plan selected files without downloading')
@@ -973,15 +1037,17 @@ def main():
     elif args.command == 'retention-apply':
         raise ValueError('native apply blocked: cannot prove running/pinned/automation/fork protection through supported interfaces; no histories deleted')
     elif args.command == 'verify':
-        result = verify(args.run)
+        if args.max_expanded_mib <= 0:
+            raise ValueError('--max-expanded-mib must be positive')
+        result = verify(args.run, max_bytes=args.max_expanded_mib * 1024**2)
     elif args.command == 'extract':
+        if args.max_expanded_mib <= 0:
+            raise ValueError('--max-expanded-mib must be positive')
         if args.member:
             result = extract_selected(args.run, args.destination, args.member,
                                       max_bytes=args.max_expanded_mib * 1024**2)
         else:
-            if args.max_expanded_mib != 65536:
-                raise ValueError('--max-expanded-mib requires --member')
-            result = extract(args.run, args.destination)
+            result = extract(args.run, args.destination, max_bytes=args.max_expanded_mib * 1024**2)
     elif args.command == 'restore-plan':
         result = restore_plan(args.run, args.member)
     elif args.command == 'catalog':

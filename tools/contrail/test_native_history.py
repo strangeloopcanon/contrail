@@ -81,6 +81,40 @@ class NativeHistoryTests(unittest.TestCase):
             shutil.copyfile(run / item['name'], directory / item['name'])
         return directory
 
+    def test_compressed_codex_incremental_preserves_exact_bytes_and_selected_recovery(self):
+        plain = self.source('.codex/sessions/original.jsonl', b'native fixture\n')
+        inventory = history.discover(self.home)
+        inventory['scope'] = 'all installed default-profile apps'
+        base = Path(history.backup(self.home, self.output, inventory=inventory,
+                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        # A complete Zstandard frame containing a synthetic session_meta event.
+        compressed = bytes.fromhex(
+            '28b52ffd20410902007b2274696d657374616d70223a312c2274797065223a22'
+            '73657373696f6e5f6d657461222c227061796c6f6164223a7b226964223a22'
+            '66697874757265227d7d0a')
+        source = self.source('.codex/archived_sessions/compressed.jsonl.zst', compressed)
+        inventory = history.discover(self.home)
+        inventory['scope'] = 'all installed default-profile apps'
+        run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
+                   scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        manifest = self.manifest(run)
+        self.assertEqual(manifest['comparison']['new_files'], 1)
+        self.assertEqual(manifest['comparison']['unchanged_files'], 1)
+        self.assertEqual([record['name'] for record in manifest['files']], [source['relative']])
+        record = manifest['files'][0]
+        self.assertEqual(record['bytes'], len(compressed))
+        self.assertEqual(record['sha256'], hashlib.sha256(compressed).hexdigest())
+        plan = history.restore_plan(run, [source['relative']])
+        self.assertEqual([origin['run_id'] for origin in plan['required_runs']], [run.name])
+        restored = self.root / 'selected-compressed'
+        history.extract_selected(run, restored, [source['relative']])
+        self.assertEqual((restored / source['relative']).read_bytes(), compressed)
+        self.assertFalse((restored / plain['relative']).exists())
+        unchanged = Path(history.backup(self.home, self.output, inventory=inventory, base_run=run,
+                         scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        self.assertEqual(self.manifest(unchanged)['comparison']['unchanged_files'], 2)
+        self.assertEqual(self.manifest(unchanged)['files'], [])
+
     def test_readback_verifies_released_payload_and_preserves_original_evidence(self):
         source = self.source('session.jsonl', b'original native fixture')
         database = self.source('history.sqlite', sqlite=True)
@@ -343,6 +377,18 @@ class NativeHistoryTests(unittest.TestCase):
         with self.assertRaises((EOFError, OSError, tarfile.TarError, ValueError)):
             history.verify(run)
 
+    def test_verification_budget_still_bounds_padding_after_tar_terminator(self):
+        run = self.archive_fixture([('safe.txt', b'fixture', tarfile.REGTYPE)])
+        manifest = self.manifest(run)
+        part = run / manifest['parts'][0]['name']
+        data = gzip.compress(gzip.decompress(part.read_bytes()) + b'\0' * 65536, mtime=0)
+        part.write_bytes(data)
+        manifest['parts'][0].update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+        manifest.update(archive_bytes=len(data), archive_sha256=hashlib.sha256(data).hexdigest())
+        history.write_json(run / 'manifest.json', manifest)
+        with self.assertRaisesRegex(ValueError, 'bounded TAR allowance'):
+            history.verify(run, max_bytes=7, include_base=False)
+
     def test_manifest_and_tar_path_traversal_are_rejected(self):
         for name in ("../outside", "/absolute", "dir/../outside", "dir\\outside", "dir//file"):
             with self.subTest(name=name):
@@ -569,6 +615,114 @@ class NativeHistoryTests(unittest.TestCase):
                     history.backup(self.home, self.output, inventory={"sources": [source]}, **options)
                 self.assertEqual(list(self.output.iterdir()), [])
                 self.assertEqual(Path(source["path"]).read_bytes(), bytes(range(256)))
+
+    def test_incremental_verification_budgets_only_current_checked_archive(self):
+        previous = self.source('retained.jsonl', b'a' * 32)
+        base = self.backup([previous])
+        current = self.source('current.jsonl', b'b' * 8)
+        real_verify = history.verify
+
+        def bounded_verify(*args, **kwargs):
+            return real_verify(*args, max_bytes=8, **kwargs)
+
+        # Exercise backup's final verification and cloud handoff, with a small
+        # budget standing in for the default 64 GiB rather than large fixtures.
+        with mock.patch.object(history, 'verify', side_effect=bounded_verify):
+            run = self.backup([current], base_run=base)
+        self.assertEqual(sum(record['bytes'] for record in self.manifest(run)['catalog']), 40)
+        self.assertEqual(history.verify(run, max_bytes=8, include_base=False)['status'], 'verified')
+        destination = self.root / 'current-only'
+        history.verify(run, extract_to=destination, max_bytes=8, include_base=False)
+        self.assertEqual((destination / current['relative']).read_bytes(), b'b' * 8)
+        self.assertFalse((destination / previous['relative']).exists())
+        for extract_to in (None, self.root / 'oversized-current'):
+            with self.subTest(extract_to=extract_to):
+                with mock.patch.object(history, 'verify_archive') as archive:
+                    with self.assertRaisesRegex(ValueError, 'verification budget'):
+                        history.verify(run, extract_to=extract_to, max_bytes=7, include_base=False)
+                    archive.assert_not_called()
+        self.assertFalse((self.root / 'oversized-current').exists())
+
+    def test_full_chain_budget_counts_all_checked_versions_before_extraction(self):
+        source = self.source('session.jsonl', b'a' * 32)
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * 16)
+        run = self.backup([source], base_run=base)
+        self.assertEqual(sum(record['bytes'] for record in self.manifest(run)['catalog']), 16)
+        # The final overlay is 16 bytes, but checking/extracting both versions
+        # consumes 48 bytes. Each individual origin also fits this smaller limit.
+        for extract_to in (None, self.root / 'oversized-chain'):
+            with self.subTest(extract_to=extract_to):
+                with mock.patch.object(history, 'verify_archive') as archive:
+                    with self.assertRaisesRegex(ValueError, 'verification budget'):
+                        history.verify(run, extract_to=extract_to, max_bytes=32)
+                    archive.assert_not_called()
+        self.assertFalse((self.root / 'oversized-chain').exists())
+        destination = self.root / 'full-chain'
+        receipt = history.verify(run, extract_to=destination, max_bytes=48)
+        self.assertTrue(receipt['base_archives_checked'])
+        self.assertEqual((destination / source['relative']).read_bytes(), b'b' * 16)
+
+    def test_verify_cli_accepts_explicit_chain_budget_and_rejects_nonpositive(self):
+        source = self.source('session.jsonl', b'a' * (600 * 1024))
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * (600 * 1024))
+        run = self.backup([source], base_run=base)
+        directory = Path(history.__file__).parent
+        embedded = '\n'.join((directory / name).read_text() for name in (
+            'native_sources.py', 'native_retention.py', 'native_restore.py', 'native_history.py'))
+        for launcher in ([sys.executable, str(directory / 'native_history.py')],
+                         [sys.executable, '-c', embedded]):
+            for budget, succeeds in ((1, False), (2, True), (0, False), (-1, False), (None, True)):
+                with self.subTest(embedded='-c' in launcher, budget=budget):
+                    arguments = ['verify', '--run', str(run)]
+                    if budget is not None:
+                        arguments += ['--max-expanded-mib', str(budget)]
+                    result = subprocess.run(launcher + arguments, text=True, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode == 0, succeeds, result.stderr)
+                    if succeeds:
+                        self.assertEqual(json.loads(result.stdout)['status'], 'verified')
+                    else:
+                        error = json.loads(result.stderr)['error']
+                        self.assertIn('must be positive' if budget <= 0 else 'verification budget', error)
+
+    def test_full_extract_cli_forwards_budget_to_both_verification_passes(self):
+        source = self.source('session.jsonl', b'a' * 8)
+        base = self.backup([source])
+        Path(source['path']).write_bytes(b'b' * 8)
+        run = self.backup([source], base_run=base)
+        real_verify = history.verify
+        default_bytes = 65536 * 1024**2
+        for budget in (None, 131072, 0, -1):
+            with self.subTest(budget=budget):
+                destination = self.root / ('full-extract-' + str(budget))
+                arguments = ['history', 'extract', '--run', str(run),
+                             '--destination', str(destination)]
+                if budget is not None:
+                    arguments += ['--max-expanded-mib', str(budget)]
+                checked_budgets = []
+
+                def scaled_verify(*args, max_bytes=default_bytes, **kwargs):
+                    checked_budgets.append(max_bytes)
+                    # Scale the real 64/128 GiB CLI limits to 8/16-byte fixtures.
+                    return real_verify(*args, max_bytes=max_bytes * 8 // default_bytes, **kwargs)
+
+                with mock.patch.object(sys, 'argv', arguments), \
+                        mock.patch.object(history, 'verify', side_effect=scaled_verify), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    if budget == 131072:
+                        history.main()
+                    else:
+                        expected = 'verification budget' if budget is None else 'must be positive'
+                        with self.assertRaisesRegex(ValueError, expected):
+                            history.main()
+                if budget == 131072:
+                    self.assertEqual(checked_budgets, [2 * default_bytes, 2 * default_bytes])
+                    self.assertEqual(json.loads(output.getvalue())['status'], 'verified')
+                    self.assertEqual((destination / source['relative']).read_bytes(), b'b' * 8)
+                else:
+                    self.assertEqual(checked_budgets, [default_bytes] if budget is None else [])
+                    self.assertFalse(destination.exists())
 
     def test_lock_and_retry_preserve_completed_backup(self):
         source = self.source("session.jsonl")
@@ -799,6 +953,105 @@ class NativeHistoryTests(unittest.TestCase):
         self.assertEqual(result["release_policy"], "provider-upload-integrity")
         self.assertFalse(any(part.exists() for part in self.parts(run)))
 
+    def test_strict_release_accepts_bound_full_parent_readback_without_rewriting_history(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        history.verify_readback(base, downloaded)
+        retained = {path.name: path.read_bytes() for path in base.iterdir()}
+        Path(source['path']).write_bytes(b'delta')
+        run = self.backup([source], base_run=base)
+        self.record(run, self.cloud_receipt(run))
+        proof_path = base / 'cloud-readback.json'
+        proof = json.loads(proof_path.read_text())
+        proof['files'][0]['sha256'] = '0' * 64
+        history.write_json(proof_path, proof)
+        with self.assertRaisesRegex(ValueError, 'readback evidence'):
+            history.release_local(run)
+        self.assertTrue(all(part.exists() for part in self.parts(run)))
+        proof_path.write_bytes(retained[proof_path.name])
+        result = history.release_local(run)
+        self.assertEqual(result['release_policy'], 'checksums-required')
+        self.assertEqual(result['verification_level'], 'sha256')
+        self.assertFalse(result['accept_size_only'])
+        self.assertEqual({name: (base / name).read_bytes() for name in retained}, retained)
+        self.assertFalse(any(part.exists() for part in self.parts(run)))
+
+    def test_parent_readback_refuses_tampered_incomplete_or_wrong_origin_proofs(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        original = history.verify_readback(base, downloaded)
+        manifest = self.manifest(base)
+        mutations = [
+            lambda p: p.update(format='unknown'),
+            lambda p: p.update(status='pending'),
+            lambda p: p.update(verification_level='size-only'),
+            lambda p: p.update(run_id='other-run'),
+            lambda p: p.update(manifest_sha256='0' * 64),
+            lambda p: p.update(archive_sha256='0' * 64),
+            lambda p: p.update(owner='other@example.invalid'),
+            lambda p: p.update(parent_folder_id='other-parent'),
+            lambda p: p.update(folder_id='other-folder'),
+            lambda p: p.update(private=False),
+            lambda p: p['bindings'].pop('verification.json'),
+            lambda p: p['bindings'].update({'cloud-receipt.json': '0' * 64}),
+            lambda p: p['archive_verification'].update(status='pending'),
+            lambda p: p['archive_verification'].update(files=0),
+            lambda p: p['archive_verification'].update(sqlite_integrity='failed'),
+            lambda p: p['archive_verification'].update(archive_sha256='0' * 64),
+            lambda p: p['archive_verification'].pop('verification'),
+            lambda p: p.pop('archive_verification'),
+            lambda p: p['files'].pop(),
+            lambda p: p['files'].append(p['files'][0]),
+            lambda p: p['files'][0].update(id='other-id'),
+            lambda p: p['files'][0].update(bytes=999),
+            lambda p: p['files'][0].update(sha256='0' * 64),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                proof = json.loads(json.dumps(original))
+                mutate(proof)
+                history.write_json(base / 'cloud-readback.json', proof)
+                with self.assertRaisesRegex(ValueError, 'readback evidence'):
+                    history.verified_cloud_archive(base, manifest)
+
+    def test_parent_readback_refuses_stale_original_evidence_and_reused_remote_ids(self):
+        source = self.source('session.jsonl', b'base')
+        base = self.backup([source])
+        self.record(base, self.size_only_receipt(base))
+        downloaded = self.readback_downloads(base)
+        history.release_local(base, accept_size_only=True)
+        history.verify_readback(base, downloaded)
+        for name, field in (('verification.json', 'verified_utc'),
+                            ('cloud-handoff.json', 'workflow'), ('cloud-receipt.json', 'recorded_utc')):
+            with self.subTest(name=name):
+                path = base / name
+                original = path.read_bytes()
+                changed = json.loads(original)
+                changed[field] = 'changed'
+                history.write_json(path, changed)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'readback evidence|cloud handoff'):
+                        history.verified_cloud_archive(base, self.manifest(base))
+                finally:
+                    path.write_bytes(original)
+        receipt_path = base / 'cloud-receipt.json'
+        receipt = json.loads(receipt_path.read_text())
+        receipt['files'][1]['id'] = receipt['files'][0]['id']
+        history.write_json(receipt_path, receipt)
+        proof_path = base / 'cloud-readback.json'
+        proof = json.loads(proof_path.read_text())
+        proof['files'][1]['id'] = proof['files'][0]['id']
+        proof['bindings']['cloud-receipt.json'] = history.digest_file(receipt_path)
+        history.write_json(proof_path, proof)
+        with self.assertRaisesRegex(ValueError, 'readback evidence'):
+            history.verified_cloud_archive(base, self.manifest(base))
+
     def test_size_only_released_base_requires_unchanged_authorization_bindings(self):
         source = self.source("session.jsonl", b"base")
         base = self.backup([source])
@@ -934,6 +1187,70 @@ class AntigravityHistoryTests(unittest.TestCase):
     backup = NativeHistoryTests.backup
     manifest = NativeHistoryTests.manifest
 
+    def test_antigravity_only_incremental_adds_legacy_profiles_without_path_collisions(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        relative = 'conversations/' + identity + '.pb'
+        current = self.source('.gemini/antigravity/' + relative, b'current-profile')
+        current['app'] = 'antigravity'
+        inventory = history.discover(self.home)
+        inventory['scope'] = ['antigravity']
+        base = Path(history.backup(self.home, self.output, inventory=inventory,
+                    scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        expected = {current['relative']: b'current-profile'}
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            source = self.source('.gemini/' + profile + '/' + relative, profile.encode())
+            expected[source['relative']] = profile.encode()
+        summary = self.source('.gemini/antigravity-cli/jetbox_summaries_proto.pb', b'legacy-summary')
+        expected[summary['relative']] = b'legacy-summary'
+        self.source('.gemini/antigravity-backup/' + relative, b'redundant-copy')
+        self.source('.gemini/antigravity-cli/auth.json', b'private-profile-marker')
+        inventory = history.discover(self.home)
+        inventory['scope'] = ['antigravity']
+        run = Path(history.backup(self.home, self.output, inventory=inventory, base_run=base,
+                   scratch_bytes=1024**2, output_bytes=2 * 1024**2)['run'])
+        manifest = self.manifest(run)
+        self.assertEqual(manifest['inventory']['scope'], ['antigravity'])
+        self.assertEqual(manifest['comparison']['new_files'], 3)
+        self.assertEqual(manifest['comparison']['unchanged_files'], 1)
+        self.assertEqual({record['name'] for record in manifest['catalog']}, set(expected))
+        self.assertEqual({record['app'] for record in manifest['catalog']}, {'antigravity'})
+        target = self.root / 'restored-legacy-profiles'
+        history.extract(run, target)
+        self.assertEqual({name: (target / name).read_bytes() for name in expected}, expected)
+        self.assertFalse((target / '.gemini/antigravity-backup').exists())
+        self.assertFalse((target / '.gemini/antigravity-cli/auth.json').exists())
+
+    def test_antigravity_legacy_unknown_database_schema_fails_without_native_changes(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            with self.subTest(profile=profile):
+                source = self.source('.gemini/' + profile + '/conversations/' + identity + '.db', sqlite=True)
+                source['app'] = 'antigravity'
+                with contextlib.closing(sqlite3.connect(source['path'])) as database:
+                    database.execute('CREATE TABLE account_credentials(token TEXT)')
+                    database.execute("INSERT INTO account_credentials VALUES ('private-profile-marker')")
+                    database.commit()
+                before = Path(source['path']).read_bytes()
+                with self.assertRaisesRegex(ValueError, 'unrecognized Antigravity history database layout'):
+                    self.backup([source])
+                self.assertEqual(Path(source['path']).read_bytes(), before)
+                self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_backup_output_refuses_legacy_antigravity_profiles_and_descendants(self):
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            root = self.home / '.gemini' / profile
+            for output in (root, root / 'backups', root / 'nested/backups'):
+                with self.subTest(output=output):
+                    with self.assertRaisesRegex(ValueError, 'outside live app stores'):
+                        history.backup(self.home, output, inventory={'sources': []})
+                    self.assertFalse(root.exists())
+            root.mkdir(parents=True)
+            alias = self.root / (profile + '-alias')
+            alias.symlink_to(root, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink output'):
+                history.backup(self.home, alias / 'backups', inventory={'sources': []})
+            self.assertFalse((root / 'backups').exists())
+
     def test_antigravity_incremental_from_legacy_all_apps_and_recovery(self):
         codex = self.source(".codex/sessions/session.jsonl", b"old-history")
         codex['app'] = 'codex'
@@ -996,17 +1313,20 @@ class AntigravityHistoryTests(unittest.TestCase):
     def test_antigravity_cli_scope_inventory_catalog_and_output_guard(self):
         import sys
         identity = '12345678-1234-1234-1234-123456789012'
-        self.source('.gemini/antigravity/conversations/' + identity + '.pb', b'fixture')
+        for profile in ('antigravity', 'antigravity-cli', 'antigravity-ide'):
+            self.source('.gemini/' + profile + '/conversations/' + identity + '.pb', b'fixture')
+        self.source('.codex/sessions/unselected.jsonl', b'unselected-app')
         with mock.patch.object(sys, 'argv', ['history', 'inventory', '--home', str(self.home)]), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
-        self.assertEqual(json.loads(output.getvalue())['app_counts']['antigravity'], 1)
+        self.assertEqual(json.loads(output.getvalue())['app_counts']['antigravity'], 3)
         with mock.patch.object(sys, 'argv', ['history', 'backup', '--home', str(self.home), '--output', str(self.output), '--app', 'antigravity', '--scratch-mib', '1', '--output-mib', '2']), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
         run = Path(json.loads(output.getvalue())['run'])
         self.assertEqual(self.manifest(run)['inventory']['scope'], ['antigravity'])
+        self.assertEqual({record['app'] for record in self.manifest(run)['files']}, {'antigravity'})
         with mock.patch.object(sys, 'argv', ['history', 'catalog', '--run', str(run), '--app', 'antigravity']), contextlib.redirect_stdout(io.StringIO()) as output:
             history.main()
-        self.assertEqual(json.loads(output.getvalue())['matched_files'], 1)
+        self.assertEqual(json.loads(output.getvalue())['matched_files'], 3)
         with self.assertRaisesRegex(ValueError, 'outside live app stores'):
             history.backup(self.home, self.home / '.gemini/antigravity/backup')
 

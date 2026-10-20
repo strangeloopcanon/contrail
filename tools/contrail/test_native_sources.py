@@ -34,7 +34,9 @@ class NativeSourcesTests(unittest.TestCase):
     def test_allowlist_includes_history_and_excludes_credentials(self):
         included = {
             ".codex/sessions/2026/01/rollout.jsonl": False,
+            ".codex/sessions/2026/01/compressed.jsonl.zst": False,
             ".codex/archived_sessions/rollout.jsonl": False,
+            ".codex/archived_sessions/compressed.jsonl.zst": False,
             ".codex/state_5.sqlite": True,
             ".codex/thread_history_1.sqlite": True,
             ".codex/history.jsonl": False,
@@ -84,9 +86,11 @@ class NativeSourcesTests(unittest.TestCase):
     def test_unknown_database_and_transcript_files_are_reported(self):
         self.file(".codex/state_future.sqlite")
         self.file(".codex/sessions/unknown.bin")
+        self.file(".codex/sessions/unknown.zst")
+        self.file(".codex/sessions/unfinished.jsonl.zst.tmp")
         result = discover(self.home)
         self.assertEqual(result["sources"], [])
-        self.assertEqual(len(result["unsupported"]), 2)
+        self.assertEqual(len(result["unsupported"]), 4)
 
     def test_symlink_files_directories_and_ancestors_are_not_followed(self):
         target = self.file("outside/secret.jsonl")
@@ -474,6 +478,46 @@ class AntigravitySourcesTests(unittest.TestCase):
         outside = self.file("outside/secret")
         (self.home / root / "brain" / identity / "link").symlink_to(outside)
         self.assertTrue(any("symlink" in item for item in discover(self.home)["exclusions"]))
+
+    def test_antigravity_legacy_profiles_use_same_allowlist_and_exclude_backup_copies(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        included = {}
+        for profile in ('antigravity', 'antigravity-cli', 'antigravity-ide'):
+            root = '.gemini/' + profile + '/'
+            for name, sqlite in (
+                ('conversations/' + identity + '.pb', False),
+                ('conversations/' + identity + '.db', True),
+                ('brain/' + identity + '/artifacts/task.md', False),
+                ('browser_recordings/' + identity + '/capture.jpg', False),
+                ('annotations/' + identity + '.pbtxt', False),
+                ('conversation_summaries.db', True),
+                ('agyhub_summaries_proto.pb', False),
+                ('jetbox_summaries_proto.pb', False),
+            ):
+                included[root + name] = sqlite
+                self.file(root + name)
+            for name in ('auth.json', 'config.json', 'mcp_config.json', 'generalappstate.vscdb',
+                         'implicit/cache.pb', 'code_tracker/state.pb', 'bin/runtime',
+                         'logs/worker.jsonl', 'scratch/session.pb', 'plugins/auth.json',
+                         'conversations/auth.db', 'brain/unknown/private.txt'):
+                self.file(root + name, b'private-profile-marker')
+        for profile in ('antigravity-backup', 'antigravity-other'):
+            self.file('.gemini/' + profile + '/conversations/' + identity + '.pb')
+            self.file('.gemini/' + profile + '/jetbox_summaries_proto.pb')
+        result = discover(self.home)
+        self.assertEqual({source['relative']: source['sqlite'] for source in result['sources']}, included)
+        self.assertTrue(all(source['app'] == 'antigravity' for source in result['sources']))
+
+    def test_antigravity_legacy_profile_symlinks_are_never_followed(self):
+        identity = '12345678-1234-1234-1234-123456789012'
+        target = self.file('outside/conversations/' + identity + '.pb')
+        gemini = self.home / '.gemini'
+        gemini.mkdir()
+        for profile in ('antigravity-cli', 'antigravity-ide'):
+            (gemini / profile).symlink_to(target.parent.parent, target_is_directory=True)
+        result = discover(self.home)
+        self.assertEqual(result['sources'], [])
+        self.assertEqual(sum('symlink excluded' in item for item in result['exclusions']), 2)
 
 
 class AntigravityProjectionTests(unittest.TestCase):

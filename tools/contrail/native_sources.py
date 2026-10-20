@@ -108,7 +108,8 @@ def discover(home: Path):
     # Codex transcript trees and versioned native metadata/projection databases.
     codex = home / ".codex"
     for directory in ("sessions", "archived_sessions"):
-        tree("codex", codex / directory, lambda path: path.suffix == ".jsonl")
+        tree("codex", codex / directory,
+             lambda path: path.name.endswith((".jsonl", ".jsonl.zst")))
     for name in ("session_index.jsonl", "history.jsonl"):
         add("codex", codex / name)
     for path, info in _children(codex, exclusions):
@@ -187,29 +188,31 @@ def discover(home: Path):
         tree("claude-code", claude / dependency,
              lambda path, dep=dependency: dep == "file-history" or path.suffix == ".json")
 
+    # Only named native profiles qualify; copied backup directories do not.
     # History directories are separate from account/config/runtime state.
-    antigravity = home / ".gemini/antigravity"
     identity = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
-    for path, info in _children(antigravity / "conversations", exclusions):
-        if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.(?:db|pb)", path.name):
-            add("antigravity", path, path.suffix == ".db")
-        elif not path.name.endswith(("-wal", "-shm")):
-            unsupported.append("unrecognized Antigravity conversation excluded: " + str(path))
-    for name in ("conversation_summaries.db", "agyhub_summaries_proto.pb"):
-        add("antigravity", antigravity / name, name.endswith(".db"))
-    # Arbitrary conversation-generated artifacts remain private and unredacted.
-    # Only native conversation-ID roots qualify; unrelated profile files do not.
-    for directory in ("brain", "browser_recordings"):
-        for path, info in _children(antigravity / directory, exclusions):
-            if stat.S_ISDIR(info.st_mode) and re.fullmatch(identity, path.name):
-                tree("antigravity", path, lambda item: item.name != ".DS_Store")
-            elif path.name != ".DS_Store":
-                unsupported.append("unrecognized Antigravity artifact excluded: " + str(path))
-    for path, info in _children(antigravity / "annotations", exclusions):
-        if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.pbtxt", path.name):
-            add("antigravity", path)
-        else:
-            unsupported.append("unrecognized Antigravity annotation excluded: " + str(path))
+    for profile in ("antigravity", "antigravity-cli", "antigravity-ide"):
+        antigravity = home / ".gemini" / profile
+        for path, info in _children(antigravity / "conversations", exclusions):
+            if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.(?:db|pb)", path.name):
+                add("antigravity", path, path.suffix == ".db")
+            elif not path.name.endswith(("-wal", "-shm")):
+                unsupported.append("unrecognized Antigravity conversation excluded: " + str(path))
+        for name in ("conversation_summaries.db", "agyhub_summaries_proto.pb", "jetbox_summaries_proto.pb"):
+            add("antigravity", antigravity / name, name.endswith(".db"))
+        # Arbitrary conversation-generated artifacts remain private and unredacted.
+        # Only native conversation-ID roots qualify; unrelated profile files do not.
+        for directory in ("brain", "browser_recordings"):
+            for path, info in _children(antigravity / directory, exclusions):
+                if stat.S_ISDIR(info.st_mode) and re.fullmatch(identity, path.name):
+                    tree("antigravity", path, lambda item: item.name != ".DS_Store")
+                elif path.name != ".DS_Store":
+                    unsupported.append("unrecognized Antigravity artifact excluded: " + str(path))
+        for path, info in _children(antigravity / "annotations", exclusions):
+            if stat.S_ISREG(info.st_mode) and re.fullmatch(identity + r"\.pbtxt", path.name):
+                add("antigravity", path)
+            else:
+                unsupported.append("unrecognized Antigravity annotation excluded: " + str(path))
 
     # Reading bundle metadata avoids starting apps or executing an untrusted CLI.
     # CLI versions remain unknown; a history layout is not an app version.
