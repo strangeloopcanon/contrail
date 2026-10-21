@@ -66,16 +66,94 @@ fn run_native_history(args: &[OsString]) -> Result<()> {
         "\n",
         include_str!("../native_history.py")
     );
-    let status = Command::new("python3")
+    let python = native_history_python()?;
+    let status = Command::new(&python)
         .arg("-c")
         .arg(engine)
         .args(args)
         .status()
-        .context("native history backup requires Python 3 with sqlite3")?;
+        .with_context(|| {
+            format!(
+                "failed to run native history with {}",
+                python.to_string_lossy()
+            )
+        })?;
     if !status.success() {
         bail!("native history command failed ({status})");
     }
     Ok(())
+}
+
+// Prefer a decoder-capable runtime even when a project-local python3 is older.
+// Probe only an in-memory database, never a user's profile or archive.
+const NATIVE_PYTHON_PROBE: &str = r#"
+import sys, sqlite3
+if sys.version_info < (3, 9):
+    raise RuntimeError('Python 3.9 or later is required')
+if sqlite3.sqlite_version_info < (3, 27):
+    raise RuntimeError('SQLite VACUUM INTO is required')
+with sqlite3.connect(':memory:') as db:
+    if db.execute('PRAGMA journal_mode=OFF').fetchone()[0] != 'off':
+        raise RuntimeError('SQLite journal_mode=OFF is required')
+try:
+    from compression import zstd
+except ImportError:
+    print(sys.executable)
+    sys.exit(10)
+print(sys.executable)
+"#;
+
+fn native_history_python() -> Result<OsString> {
+    select_native_history_python(
+        env::var_os("CONTRAIL_HISTORY_PYTHON"),
+        &[
+            "python3".into(),
+            "python3.14".into(),
+            "/opt/homebrew/bin/python3.14".into(),
+            "/usr/local/bin/python3.14".into(),
+        ],
+    )
+}
+
+fn probe_native_python(candidate: &OsString) -> Result<(OsString, bool)> {
+    let output = Command::new(candidate)
+        .args(["-c", NATIVE_PYTHON_PROBE])
+        .output()
+        .with_context(|| format!("could not run {}", candidate.to_string_lossy()))?;
+    if !matches!(output.status.code(), Some(0 | 10)) {
+        bail!(
+            "{}: {}",
+            candidate.to_string_lossy(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let executable = String::from_utf8(output.stdout)?;
+    let executable = executable.trim_end_matches(['\r', '\n']);
+    if executable.is_empty() {
+        bail!("Python probe returned no executable");
+    }
+    Ok((executable.into(), output.status.success()))
+}
+
+fn select_native_history_python(
+    override_python: Option<OsString>,
+    candidates: &[OsString],
+) -> Result<OsString> {
+    if let Some(python) = override_python {
+        return probe_native_python(&python)
+            .map(|(executable, _)| executable)
+            .context("CONTRAIL_HISTORY_PYTHON must name one compatible Python executable, without arguments");
+    }
+    let mut fallback = None;
+    for candidate in candidates {
+        if let Ok((executable, zstd)) = probe_native_python(candidate) {
+            if zstd {
+                return Ok(executable);
+            }
+            fallback.get_or_insert(executable);
+        }
+    }
+    fallback.context("native history requires Python 3.9+ with SQLite 3.27+ and journal_mode=OFF; set CONTRAIL_HISTORY_PYTHON to a compatible executable (Python 3.14+ adds compression.zstd)")
 }
 
 #[derive(Clone, Copy)]
@@ -372,7 +450,7 @@ mod tests {
 
     #[test]
     fn native_history_fixtures() {
-        let status = std::process::Command::new("python3")
+        let status = std::process::Command::new(super::native_history_python().unwrap())
             .args([
                 "-m",
                 "unittest",
@@ -391,6 +469,79 @@ mod tests {
     #[test]
     fn native_history_embedded_help() {
         super::run_native_history(&[OsString::from("--help")]).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn native_python_selection_probes_candidates_and_honors_override() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let root = std::env::temp_dir().join(format!(
+            "contrail-python-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        // These disposable executables stand in for runtimes. No process-wide
+        // environment changes or installed Python versions are needed.
+        let runtime = |name: &str, code: i32| -> OsString {
+            let path = root.join(name);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\nprintf '%s\\n' \"$0\"\nexit {code}\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path.into_os_string()
+        };
+        let legacy = runtime("python3", 10);
+        let capable = runtime("python3.14", 0);
+        let invalid = runtime("invalid", 1);
+        let missing = root.join("missing").into_os_string();
+        let shim = runtime("shim", 0);
+        std::fs::write(&shim, "#!/bin/sh\nprintf '%s/python3.14\\n' \"${0%/*}\"\n").unwrap();
+        let select = super::select_native_history_python;
+        assert_eq!(select(Some(shim), &[]).unwrap(), capable);
+        assert_eq!(
+            select(
+                None,
+                &[
+                    missing.clone(),
+                    invalid.clone(),
+                    legacy.clone(),
+                    capable.clone()
+                ]
+            )
+            .unwrap(),
+            capable
+        );
+        assert_eq!(
+            select(None, &[invalid.clone(), legacy.clone()]).unwrap(),
+            legacy
+        );
+        assert_eq!(
+            select(Some(legacy.clone()), std::slice::from_ref(&capable)).unwrap(),
+            legacy
+        );
+        assert!(
+            select(None, &[missing.clone(), invalid.clone()])
+                .unwrap_err()
+                .to_string()
+                .contains("CONTRAIL_HISTORY_PYTHON")
+        );
+        for explicit in [invalid, missing, OsString::new()] {
+            assert!(
+                select(Some(explicit), std::slice::from_ref(&capable))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("CONTRAIL_HISTORY_PYTHON")
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -573,7 +573,7 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
                     'home': str(home), 'files': records, 'parts': writer.parts, 'archive_bytes': writer.total,
                     'archive_sha256': writer.archive_hash.hexdigest(), 'inventory': inventory,
                     'boundary': 'per-file/per-database snapshots, not globally atomic; discovered paths frozen before snapshot',
-                    'retention': '30 days since last activity; native apply separately guarded'}
+                    'retention': 'archive does not set a native retention window; review with retention-plan --days; native deletion disabled'}
         if destination:
             manifest['cloud_destination'] = destination
         manifest['comparison'] = {'new_files': sum(r['name'] not in prior_names for r in records),
