@@ -453,7 +453,27 @@ def catalog_from_chain(chain):
     return catalog
 
 
-def compact_manifest(run, max_bytes=None):
+def compact_manifest(run, max_bytes=None, _output_lock_held=False):
+    """Serialize compaction with backups that can create a child manifest."""
+    max_bytes = MANIFEST_UPLOAD_LIMIT if max_bytes is None else max_bytes
+    if max_bytes <= 0:
+        raise ValueError('manifest upload limit must be positive')
+    run = Path(run).absolute()
+    if regular_path(run / 'manifest.json').stat().st_size <= max_bytes:
+        return False
+    if _output_lock_held:
+        return _compact_manifest_unlocked(run, max_bytes)
+    lock = run.parent / '.native-history.lock'
+    descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        os.write(descriptor, json.dumps({'pid': os.getpid(), 'started_utc': utc()}).encode())
+        return _compact_manifest_unlocked(run, max_bytes)
+    finally:
+        os.close(descriptor)
+        lock.unlink(missing_ok=True)
+
+
+def _compact_manifest_unlocked(run, max_bytes):
     """Omit only the redundant catalog when an unbound manifest exceeds upload size."""
     max_bytes = MANIFEST_UPLOAD_LIMIT if max_bytes is None else max_bytes
     if max_bytes <= 0:
@@ -468,6 +488,36 @@ def compact_manifest(run, max_bytes=None):
     def require_unbound():
         if any((run / name).exists() or (run / name).is_symlink() for name in closed_proofs):
             raise ValueError('cannot compact manifest bound by cloud or release evidence')
+        for sibling in run.parent.iterdir():
+            if sibling == run:
+                continue
+            if sibling.is_symlink():
+                raise ValueError('cannot inspect symlink sibling for child backup references')
+            if not sibling.is_dir():
+                continue
+            candidate = sibling / 'manifest.json'
+            if not candidate.exists() and not candidate.is_symlink():
+                continue
+            candidate = regular_path(candidate)
+            before_read = fingerprint(candidate)
+            try:
+                child = json.loads(candidate.read_text())
+            except (UnicodeError, ValueError) as error:
+                raise ValueError('cannot inspect malformed sibling backup manifest') from error
+            if fingerprint(candidate) != before_read:
+                raise ValueError('sibling backup manifest changed during compaction')
+            if not isinstance(child, dict) or child.get('format') != 'contrail-native-history-v1':
+                raise ValueError('cannot inspect unsupported sibling backup manifest')
+            base = child.get('base')
+            if base is None:
+                continue
+            if not isinstance(base, dict) or not isinstance(base.get('run_id'), str):
+                raise ValueError('cannot inspect malformed sibling backup base')
+            safe_name(base['run_id'])
+            if '/' in base['run_id']:
+                raise ValueError('invalid sibling base run ID')
+            if base['run_id'] == run.name:
+                raise ValueError('cannot compact manifest referenced by a child backup')
 
     require_unbound()
     chain, catalog = archive_chain(run)
@@ -637,7 +687,7 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
         if prior:
             manifest['base'] = {'run_id': prior['run_id'], 'manifest_sha256': digest_file(Path(base_run) / 'manifest.json')}
         write_json(run / 'manifest.json', manifest, compact=True)
-        compact_manifest(run)
+        compact_manifest(run, _output_lock_held=True)
         (run / 'RESTORE.md').write_text(
             '# Native history recovery\n\nFor full recovery, download every referenced base run and this run into sibling folders named by run ID, with each run’s numbered parts and manifest.json together. '
             'Run `contrail history verify --run FOLDER`, then '

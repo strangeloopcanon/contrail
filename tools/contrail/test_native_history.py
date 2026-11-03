@@ -760,6 +760,72 @@ class NativeHistoryTests(unittest.TestCase):
                 self.assertEqual({path.name: path.read_bytes() for path in run.iterdir()}, before)
                 proof.unlink()
 
+    def test_manifest_compaction_refuses_existing_child_without_changing_either_run(self):
+        source = self.source("session.jsonl", b"base fixture")
+        base = self.backup([source])
+        Path(source["path"]).write_bytes(b"changed fixture")
+        child = self.backup([source], base_run=base)
+        self.assertEqual(history.verify(base)["status"], "verified")
+        self.assertEqual(history.verify(child)["status"], "verified")
+        before = {path: path.read_bytes() for folder in (base, child) for path in folder.iterdir()}
+        with self.assertRaisesRegex(ValueError, "referenced by a child backup"):
+            history.compact_manifest(base, max_bytes=self.manifest_without_catalog_size(base))
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(history.verify(child)["status"], "verified")
+        self.assertFalse((self.output / ".native-history.lock").exists())
+
+    def test_manifest_compaction_refuses_unsafe_or_malformed_sibling_manifests(self):
+        run = self.backup([self.source("session.jsonl")])
+        sibling = self.output / "candidate-child"
+        sibling.mkdir()
+        candidate = sibling / "manifest.json"
+        before = (run / "manifest.json").read_bytes()
+        for malformed in ("{", "[]", '{"format":"contrail-native-history-v1","base":[]}'):
+            with self.subTest(manifest=malformed):
+                candidate.write_text(malformed)
+                with self.assertRaisesRegex(ValueError, "sibling backup"):
+                    history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+                self.assertEqual((run / "manifest.json").read_bytes(), before)
+                self.assertEqual(candidate.read_text(), malformed)
+                self.assertFalse((self.output / ".native-history.lock").exists())
+        candidate.unlink()
+        candidate.symlink_to(run / "manifest.json")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+
+    def test_manifest_compaction_preserves_an_existing_output_lock(self):
+        run = self.backup([self.source("session.jsonl")])
+        lock = self.output / ".native-history.lock"
+        lock.write_text("other backup fixture")
+        before = (run / "manifest.json").read_bytes()
+        with self.assertRaises(FileExistsError):
+            history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+        self.assertEqual(lock.read_text(), "other backup fixture")
+
+    def test_manifest_compaction_rechecks_a_child_created_during_staging(self):
+        run = self.backup([self.source("session.jsonl")])
+        before = (run / "manifest.json").read_bytes()
+        original = history.write_json
+
+        def create_child_during_write(path, *args, **kwargs):
+            original(path, *args, **kwargs)
+            if path.name.startswith("manifest-compaction-"):
+                child = self.output / "concurrent-child"
+                child.mkdir()
+                original(child / "manifest.json", {
+                    "format": "contrail-native-history-v1",
+                    "base": {"run_id": run.name, "manifest_sha256": history.digest_file(run / "manifest.json")},
+                })
+
+        with mock.patch.object(history, "write_json", side_effect=create_child_during_write):
+            with self.assertRaisesRegex(ValueError, "referenced by a child backup"):
+                history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+        self.assertFalse(list(run.glob("manifest-compaction-*.tmp")))
+        self.assertFalse((self.output / ".native-history.lock").exists())
+
     def test_manifest_compaction_rejects_bad_catalog_and_size_without_mutation(self):
         run = self.backup([self.source("session.jsonl")])
         for malformed in (False, True):
