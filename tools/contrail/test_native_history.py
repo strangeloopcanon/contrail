@@ -386,6 +386,48 @@ class NativeHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "order"):
             history.verify(first)
 
+    def test_antigravity_is_archived_before_later_codex_work_removes_live_sources(self):
+        codex = self.source(".codex/sessions/slow.jsonl", b"Codex history fixture")
+        codex["app"] = "codex"
+        antigravity = [
+            self.source(".gemini/antigravity-cli/brain/session/z.jsonl", b"last Antigravity fixture"),
+            self.source(".gemini/antigravity-cli/brain/session/a.jsonl", b"first Antigravity fixture"),
+        ]
+        contents = {source["relative"]: Path(source["path"]).read_bytes() for source in [codex, *antigravity]}
+        for source in antigravity:
+            source["app"] = "antigravity"
+        snapshot = history.snapshot_file
+        observed = []
+
+        def remove_antigravity_when_codex_starts(source, destination, max_bytes):
+            observed.append(source["relative"])
+            if source["app"] == "codex":
+                for transient in antigravity:
+                    Path(transient["path"]).unlink()
+            return snapshot(source, destination, max_bytes)
+
+        with mock.patch.object(history, "snapshot_file", side_effect=remove_antigravity_when_codex_starts):
+            run = self.backup([codex, *antigravity])
+        expected = sorted(source["relative"] for source in antigravity) + [codex["relative"]]
+        self.assertEqual(observed, expected)
+        self.assertEqual([record["name"] for record in self.manifest(run)["files"]], expected)
+        self.assertEqual([record["name"] for record in self.manifest(run)["catalog"]], sorted(contents))
+        self.assertEqual(history.verify(run)["files"], len(contents))
+        restored = self.root / "restored-antigravity-cutoff"
+        history.extract(run, restored)
+        for name, content in contents.items():
+            self.assertEqual((restored / name).read_bytes(), content)
+        self.assertTrue(all(not Path(source["path"]).exists() for source in antigravity))
+        self.assertEqual(Path(codex["path"]).read_bytes(), contents[codex["relative"]])
+
+    def test_antigravity_missing_before_snapshot_still_fails_and_discards_run(self):
+        source = self.source(".gemini/antigravity-cli/brain/session/removed.jsonl")
+        source["app"] = "antigravity"
+        Path(source["path"]).unlink()
+        with self.assertRaisesRegex(ValueError, "snapshot failed for antigravity"):
+            self.backup([source])
+        self.assertEqual(list(self.output.iterdir()), [])
+
     def test_absent_apps_have_a_valid_empty_backup(self):
         run = self.backup()
         self.assertEqual(history.verify(run)["files"], 0)

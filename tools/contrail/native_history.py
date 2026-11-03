@@ -530,7 +530,8 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
         run = output / run_id
         run.mkdir(mode=0o700)
         records = []
-        sources = sorted(inventory['sources'], key=lambda s: s['relative'])
+        # Capture Antigravity's volatile history before slower app snapshots.
+        sources = sorted(inventory['sources'], key=lambda s: (s['app'] != 'antigravity', s['relative']))
         names = [s['relative'] for s in sources]
         if len(names) != len(set(names)):
             raise ValueError('duplicate source paths')
