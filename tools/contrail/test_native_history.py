@@ -50,6 +50,12 @@ class NativeHistoryTests(unittest.TestCase):
     def parts(self, run):
         return [run / part["name"] for part in self.manifest(run)["parts"]]
 
+    def manifest_without_catalog_size(self, run):
+        candidate = {key: value for key, value in self.manifest(run).items() if key != "catalog"}
+        path = self.root / "manifest-size-fixture.json"
+        history.write_json(path, candidate, compact=True)
+        return path.stat().st_size
+
     def cloud_receipt(self, run):
         handoff = json.loads((run / "cloud-handoff.json").read_text())
         return {
@@ -689,6 +695,137 @@ class NativeHistoryTests(unittest.TestCase):
                     history.backup(self.home, self.output, inventory={"sources": [source]}, **options)
                 self.assertEqual(list(self.output.iterdir()), [])
                 self.assertEqual(Path(source["path"]).read_bytes(), bytes(range(256)))
+
+    def test_manifest_compaction_preserves_incremental_catalog_and_selected_recovery(self):
+        changed = self.source("changed.jsonl", b"old version")
+        missing = self.source("missing.jsonl", b"retained missing source")
+        base = self.backup([changed, missing])
+        base_metadata = {name: (base / name).read_bytes() for name in (
+            "manifest.json", "verification.json", "cloud-handoff.json")}
+        Path(changed["path"]).write_bytes(b"changed version")
+        Path(missing["path"]).unlink()
+        new = self.source("new.jsonl", b"new source")
+        run = self.backup([changed, new], base_run=base)
+        before = self.manifest(run)
+        catalog = history.archive_chain(run)[1]
+        parts = {part: part.read_bytes() for part in self.parts(run)}
+        self.assertEqual(before["comparison"]["changed_files"], 1)
+        self.assertEqual(before["comparison"]["missing_local_preserved"], 1)
+        limit = self.manifest_without_catalog_size(run)
+        self.assertLess(limit, (run / "manifest.json").stat().st_size)
+        with mock.patch.object(history, "MANIFEST_UPLOAD_LIMIT", limit):
+            handoff = history.handoff(run)
+        self.assertEqual(self.manifest(run), {key: value for key, value in before.items() if key != "catalog"})
+        self.assertEqual(history.archive_chain(run)[1], catalog)
+        self.assertEqual(history.verify(run)["files"], 3)
+        self.assertEqual({part: part.read_bytes() for part in parts}, parts)
+        self.assertEqual({name: (base / name).read_bytes() for name in base_metadata}, base_metadata)
+        manifest_hash = history.digest_file(run / "manifest.json")
+        self.assertEqual(next(item["sha256"] for item in handoff["files"] if item["name"] == "manifest.json"), manifest_hash)
+        self.assertEqual(json.loads((run / "verification.json").read_text())["manifest_sha256"], manifest_hash)
+        destination = self.root / "selected-compacted"
+        history.extract_selected(run, destination, [changed["relative"], missing["relative"]])
+        self.assertEqual((destination / changed["relative"]).read_bytes(), b"changed version")
+        self.assertEqual((destination / missing["relative"]).read_bytes(), b"retained missing source")
+        self.assertFalse((destination / new["relative"]).exists())
+
+    def test_backup_compacts_before_returning_final_manifest_binding(self):
+        source = self.source("session.jsonl")
+        ordinary = self.backup([source])
+        limit = self.manifest_without_catalog_size(ordinary) + 128
+        self.assertLess(limit, (ordinary / "manifest.json").stat().st_size)
+        with mock.patch.object(history, "MANIFEST_UPLOAD_LIMIT", limit):
+            result = history.backup(self.home, self.output,
+                inventory={"sources": [source], "unsupported": [], "exclusions": []},
+                scratch_bytes=1024**2, output_bytes=2 * 1024**2,
+                cloud_parent_id="fixture-parent", cloud_owner="owner@example.invalid")
+        run = Path(result["run"])
+        self.assertNotIn("catalog", self.manifest(run))
+        self.assertEqual(result["manifest_sha256"], history.digest_file(run / "manifest.json"))
+        self.assertLessEqual((run / "manifest.json").stat().st_size, limit)
+        self.assertEqual(history.verify(run)["files"], 1)
+        before = (run / "manifest.json").read_bytes()
+        self.assertFalse(history.compact_manifest(run, max_bytes=limit))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+
+    def test_manifest_compaction_refuses_closed_proofs_before_mutation(self):
+        run = self.backup([self.source("session.jsonl")])
+        for name in ("cloud-receipt.json", "local-release.json", "cloud-readback.json"):
+            with self.subTest(proof=name):
+                proof = run / name
+                proof.write_text("{}")
+                before = {path.name: path.read_bytes() for path in run.iterdir()}
+                with self.assertRaisesRegex(ValueError, "bound by cloud or release evidence"):
+                    history.compact_manifest(run, max_bytes=1)
+                self.assertEqual({path.name: path.read_bytes() for path in run.iterdir()}, before)
+                proof.unlink()
+
+    def test_manifest_compaction_rejects_bad_catalog_and_size_without_mutation(self):
+        run = self.backup([self.source("session.jsonl")])
+        for malformed in (False, True):
+            with self.subTest(malformed=malformed):
+                if malformed:
+                    manifest = self.manifest(run)
+                    manifest["catalog"][0]["sha256"] = "0" * 64
+                    history.write_json(run / "manifest.json", manifest, compact=True)
+                before = {path.name: path.read_bytes() for path in run.iterdir()}
+                error = "catalog does not match" if malformed else "still exceeds upload limit"
+                with self.assertRaisesRegex(ValueError, error):
+                    history.compact_manifest(run, max_bytes=1)
+                self.assertEqual({path.name: path.read_bytes() for path in run.iterdir()}, before)
+
+    def test_manifest_compaction_preserves_a_concurrent_manifest_writer(self):
+        run = self.backup([self.source("session.jsonl")])
+        original = history.write_json
+        concurrent = {**self.manifest(run), "boundary": "concurrent writer fixture"}
+
+        def concurrent_write(path, *args, **kwargs):
+            original(path, *args, **kwargs)
+            if path.name.startswith("manifest-compaction-"):
+                original(run / "manifest.json", concurrent, compact=True)
+
+        with mock.patch.object(history, "write_json", side_effect=concurrent_write):
+            with self.assertRaisesRegex(ValueError, "manifest chain changed"):
+                history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual(self.manifest(run), concurrent)
+        self.assertFalse(list(run.glob("manifest-compaction-*.tmp")))
+
+    def test_manifest_compaction_rechecks_new_cloud_binding_before_replacement(self):
+        run = self.backup([self.source("session.jsonl")])
+        before = (run / "manifest.json").read_bytes()
+        original = history.write_json
+
+        def bind_during_write(path, *args, **kwargs):
+            original(path, *args, **kwargs)
+            if path.name.startswith("manifest-compaction-"):
+                (run / "cloud-receipt.json").write_text("{}")
+
+        with mock.patch.object(history, "write_json", side_effect=bind_during_write):
+            with self.assertRaisesRegex(ValueError, "bound by cloud or release evidence"):
+                history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+        self.assertFalse(list(run.glob("manifest-compaction-*.tmp")))
+
+    def test_manifest_compaction_rechecks_parent_hash_after_chain_read(self):
+        source = self.source("session.jsonl", b"base")
+        base = self.backup([source])
+        Path(source["path"]).write_bytes(b"changed")
+        run = self.backup([source], base_run=base)
+        before = (run / "manifest.json").read_bytes()
+        rewritten_parent = (base / "manifest.json").read_bytes() + b"\n"
+        original = history.archive_chain
+
+        def parent_rewrite_after_read(folder):
+            result = original(folder)
+            (base / "manifest.json").write_bytes(rewritten_parent)
+            return result
+
+        with mock.patch.object(history, "archive_chain", side_effect=parent_rewrite_after_read):
+            with self.assertRaisesRegex(ValueError, "base manifest checksum changed"):
+                history.compact_manifest(run, max_bytes=self.manifest_without_catalog_size(run))
+        self.assertEqual((run / "manifest.json").read_bytes(), before)
+        self.assertEqual((base / "manifest.json").read_bytes(), rewritten_parent)
+        self.assertFalse(list(run.glob("manifest-compaction-*.tmp")))
 
     def test_incremental_verification_budgets_only_current_checked_archive(self):
         previous = self.source('retained.jsonl', b'a' * 32)

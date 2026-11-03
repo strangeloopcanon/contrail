@@ -24,6 +24,7 @@ if 'discover' not in globals():
     from native_retention import retention_plan
 
 PART_LIMIT = 80 * 1024 * 1024
+MANIFEST_UPLOAD_LIMIT = 100 * 1024 * 1024
 
 
 def cloud_destination(parent_id=None, owner=None, existing=None):
@@ -428,6 +429,11 @@ def archive_chain(folder):
             raise ValueError('base manifest checksum mismatch')
         current = parent
     chain.reverse()
+    return chain, catalog_from_chain(chain)
+
+
+def catalog_from_chain(chain):
+    """Reconstruct and validate the complete catalog, including absent sources."""
     catalog = {}
     initial = chain[0][1]
     for directory, manifest in chain:
@@ -444,7 +450,52 @@ def archive_chain(folder):
             catalog[record['name']] = {**record, 'origin_run_id': manifest.get('run_id', directory.name)}
         if 'catalog' in manifest and manifest['catalog'] != sorted(catalog.values(), key=lambda r: r['name']):
             raise ValueError('incremental catalog does not match backup chain')
-    return chain, catalog
+    return catalog
+
+
+def compact_manifest(run, max_bytes=None):
+    """Omit only the redundant catalog when an unbound manifest exceeds upload size."""
+    max_bytes = MANIFEST_UPLOAD_LIMIT if max_bytes is None else max_bytes
+    if max_bytes <= 0:
+        raise ValueError('manifest upload limit must be positive')
+    run = Path(run).absolute()
+    path = regular_path(run / 'manifest.json')
+    before = fingerprint(path)
+    if path.stat().st_size <= max_bytes:
+        return False
+    closed_proofs = ('cloud-receipt.json', 'local-release.json', 'cloud-readback.json')
+
+    def require_unbound():
+        if any((run / name).exists() or (run / name).is_symlink() for name in closed_proofs):
+            raise ValueError('cannot compact manifest bound by cloud or release evidence')
+
+    require_unbound()
+    chain, catalog = archive_chain(run)
+    chain_fingerprints = {directory / 'manifest.json': fingerprint(directory / 'manifest.json')
+                          for directory, _ in chain}
+    manifest = chain[-1][1]
+    if 'catalog' not in manifest:
+        raise ValueError('manifest exceeds upload limit without an optional derived catalog')
+    candidate = {key: value for key, value in manifest.items() if key != 'catalog'}
+    if catalog_from_chain([*chain[:-1], (run, candidate)]) != catalog:
+        raise ValueError('compacted manifest changes the reconstructed catalog')
+    temporary = run / ('manifest-compaction-' + uuid.uuid4().hex + '.tmp')
+    try:
+        write_json(temporary, candidate, compact=True)
+        if temporary.stat().st_size > max_bytes:
+            raise ValueError('compacted manifest still exceeds upload limit')
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+        if any(digest_file(regular_path(parent / 'manifest.json')) != child['base']['manifest_sha256']
+               for (parent, _), (_, child) in zip(chain, chain[1:])):
+            raise ValueError('base manifest checksum changed during compaction')
+        require_unbound()
+        if (fingerprint(path) != before
+                or any(fingerprint(name) != saved for name, saved in chain_fingerprints.items())):
+            raise ValueError('manifest chain changed during compaction')
+        os.replace(temporary, path)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def verified_base(folder):
@@ -586,6 +637,7 @@ def backup(home, output, inventory=None, part_bytes=PART_LIMIT, scratch_bytes=18
         if prior:
             manifest['base'] = {'run_id': prior['run_id'], 'manifest_sha256': digest_file(Path(base_run) / 'manifest.json')}
         write_json(run / 'manifest.json', manifest, compact=True)
+        compact_manifest(run)
         (run / 'RESTORE.md').write_text(
             '# Native history recovery\n\nFor full recovery, download every referenced base run and this run into sibling folders named by run ID, with each run’s numbered parts and manifest.json together. '
             'Run `contrail history verify --run FOLDER`, then '
@@ -734,6 +786,7 @@ def handoff(run, include_base=True, cloud_parent_id=None, cloud_owner=None):
     destination = cloud_destination(cloud_parent_id, cloud_owner, existing)
     if not destination:
         raise ValueError('configure --cloud-parent-id and --cloud-owner for cloud handoff')
+    compact_manifest(run)
     verification = verify(run, include_base=False)
     if include_base:
         check_cloud_parents(run, require_remote=False)
