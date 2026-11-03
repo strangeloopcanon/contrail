@@ -477,7 +477,7 @@ _CODEX_TABLE_COLUMNS = {
     "thread_dynamic_tools": "thread_id position name description input_schema defer_loading namespace",
     "thread_sections": "id name appearance",
     "thread_spawn_edges": "parent_thread_id child_thread_id status",
-    "threads": "id rollout_path created_at updated_at source model_provider cwd title sandbox_policy approval_mode tokens_used has_user_event archived archived_at git_sha git_branch git_origin_url cli_version first_user_message agent_nickname agent_role memory_mode model reasoning_effort agent_path created_at_ms updated_at_ms thread_source preview recency_at recency_at_ms history_mode name is_pinned thread_section_id section_position section_entered_at_ms project_id originator daybreak_enabled creator_user_id creator_account_id",
+    "threads": "id rollout_path created_at updated_at source model_provider cwd title sandbox_policy approval_mode tokens_used has_user_event archived archived_at git_sha git_branch git_origin_url cli_version first_user_message agent_nickname agent_role memory_mode model reasoning_effort agent_path created_at_ms updated_at_ms thread_source preview recency_at recency_at_ms history_mode name is_pinned thread_section_id section_position section_entered_at_ms project_id originator daybreak_enabled creator_user_id creator_account_id attached_thread_parent_id",
     "thread_history_projection_state": "thread_id next_rollout_byte_offset next_rollout_ordinal",
     "thread_items": "thread_id turn_id item_id rollout_ordinal created_at_ms item_json item_type updated_at_ordinal started_at_ms completed_at_ms",
     "thread_realtime_items": "thread_id item_id rollout_ordinal created_at_ms item_type item_json",

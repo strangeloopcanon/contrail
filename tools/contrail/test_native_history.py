@@ -308,6 +308,36 @@ class NativeHistoryTests(unittest.TestCase):
                 self.assertEqual(db.execute("SELECT body FROM messages").fetchall(), [("committed fixture",)])
                 self.assertEqual(db.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
 
+    def test_codex_attached_thread_parents_survive_selected_recovery_without_live_changes(self):
+        source = self.source(".codex/state_5.sqlite", sqlite=True)
+        source["app"] = "codex"
+        path = Path(source["path"])
+        rows = [("parent", "sessions/parent.jsonl", None), ("child", "sessions/child.jsonl", "parent")]
+        marker = "CODEX_ATTACHED_PARENT_AUTH_FIXTURE"
+        with contextlib.closing(sqlite3.connect(path)) as live:
+            self.assertEqual(live.execute("PRAGMA journal_mode=WAL").fetchone(), ("wal",))
+            live.execute("PRAGMA wal_autocheckpoint=0")
+            live.execute("CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,attached_thread_parent_id TEXT)")
+            live.executemany("INSERT INTO threads VALUES(?,?,?)", rows)
+            live.execute("CREATE TABLE remote_control_enrollments(token TEXT)")
+            live.execute("INSERT INTO remote_control_enrollments VALUES(?)", (marker,))
+            live.commit()
+            wal = Path(str(path) + "-wal")
+            before = {item: item.read_bytes() for item in (path, wal)}
+            other = self.source(".codex/sessions/unselected.jsonl", b"unselected fixture")
+            run = self.backup([source, other])
+            self.assertEqual(history.verify(run)["files"], 2)
+            restored = self.root / "selected-attached-thread-db"
+            history.extract_selected(run, restored, [source["relative"]])
+            restored_db = restored / source["relative"]
+            self.assertFalse((restored / other["relative"]).exists())
+            self.assertNotIn(marker.encode(), restored_db.read_bytes())
+            with contextlib.closing(sqlite3.connect(restored_db)) as db:
+                self.assertEqual(db.execute("SELECT id,rollout_path,attached_thread_parent_id FROM threads ORDER BY id").fetchall(), sorted(rows))
+                self.assertEqual(db.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+            self.assertEqual({item: item.read_bytes() for item in before}, before)
+            self.assertEqual(live.execute("SELECT token FROM remote_control_enrollments").fetchall(), [(marker,)])
+
     def test_desktop_wal_snapshot_is_projected_without_touching_live_auth(self):
         source = self.source("Library/Application Support/Cursor/User/globalStorage/state.vscdb", sqlite=True)
         source["app"] = "cursor-desktop"

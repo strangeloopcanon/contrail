@@ -383,6 +383,36 @@ class CodexSanitizerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name).resolve() / "snapshot.sqlite"
 
+    def test_attached_thread_parents_survive_history_projection(self):
+        rows = [
+            ("parent", "sessions/parent.jsonl", None),
+            ("child", "sessions/child.jsonl", "parent"),
+            ("grandchild", "sessions/grandchild.jsonl", "child"),
+        ]
+        marker = "CODEX_ATTACHED_THREAD_AUTH_SENTINEL"
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,attached_thread_parent_id TEXT)")
+            connection.executemany("INSERT INTO threads VALUES(?,?,?)", rows)
+            connection.execute("CREATE TABLE remote_control_enrollments(token TEXT)")
+            connection.execute("INSERT INTO remote_control_enrollments VALUES(?)", (marker * 400,))
+        report = sanitize_codex_snapshot(self.path)
+        self.assertEqual(report["quick_check"], "ok")
+        self.assertEqual(report["tables"]["threads"], {"before": 3, "kept": 3, "removed": 0})
+        self.assertEqual(report["excluded_tables"], ["remote_control_enrollments"])
+        self.assertNotIn(marker.encode(), self.path.read_bytes())
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT id,rollout_path,attached_thread_parent_id FROM threads ORDER BY id").fetchall(), sorted(rows))
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+
+    def test_attached_thread_schema_still_rejects_unknown_credentials_before_mutation(self):
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,attached_thread_parent_id TEXT,credential TEXT)")
+            connection.execute("INSERT INTO threads VALUES('child','sessions/child.jsonl','parent','secret')")
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "unrecognized Codex history schema: threads"):
+            sanitize_codex_snapshot(self.path)
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_state_auth_tables_and_removed_bytes_are_excluded(self):
         marker = "CODEX_ENROLLMENT_SECRET_SENTINEL"
         with sqlite3.connect(self.path) as connection:
