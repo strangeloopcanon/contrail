@@ -69,11 +69,7 @@ fn detect_claude(home: &Path, repo_roots: &[String]) -> bool {
 
     // Also check the global history file
     let history = home.join(".claude/history.jsonl");
-    if history.is_file() && scan_jsonl_file_for_repo(&history, repo_roots, 500) {
-        return true;
-    }
-
-    false
+    history.is_file() && scan_jsonl_file_for_repo(&history, repo_roots, 500)
 }
 
 fn detect_gemini(home: &Path, repo_roots: &[String]) -> bool {
